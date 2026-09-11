@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mission Support Tracker & PPT Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="images/logo.png">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body class="purple-theme">
+  <!-- Top Navigation Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <div class="logo-container">
+          <img src="images/logo.png" alt="Living Hope Baptist Church Logo" class="app-logo-img">
+        </div>
+        <div>
+          <h1 class="app-title">Living Hope Baptist Church</h1>
+          <p class="app-subtitle">Mission Support Tracker • Managok, Malaybalay City</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="btn-present" class="btn btn-secondary">
+          <i class="fa-solid fa-tv"></i> Present Slides
+        </button>
+        <button id="btn-download-pptx" class="btn btn-primary">
+          <i class="fa-solid fa-file-powerpoint"></i> Download PPT
+        </button>
+        <div class="dropdown">
+          <button class="btn btn-outline" id="btn-more-options">
+            <i class="fa-solid fa-ellipsis-vertical"></i>
+          </button>
+          <div class="dropdown-menu" id="dropdown-menu">
+            <a href="#" id="action-download-all"><i class="fa-solid fa-download"></i> Download All Quarters (.pptx)</a>
+            <a href="#" id="action-backup-json"><i class="fa-solid fa-database"></i> Export Backup (.json)</a>
+            <a href="#" id="action-add-quarter"><i class="fa-solid fa-calendar-plus"></i> Add New Quarter</a>
+            <a href="#" id="action-audit-trail"><i class="fa-solid fa-clock-rotate-left"></i> Audit Trail</a>
+            <div class="divider"></div>
+            <a href="#" id="action-reset-data" class="text-danger"><i class="fa-solid fa-rotate-left"></i> Reset to Original PPT Data</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-content">
+    <!-- Top Filter Bar -->
+    <section class="controls-card">
+      <div class="controls-grid">
+        <!-- Quarter Selector -->
+        <div class="control-group">
+          <label for="quarter-select"><i class="fa-regular fa-calendar"></i> Select Quarter</label>
+          <div class="select-wrapper">
+            <select id="quarter-select" class="form-select"></select>
+          </div>
+        </div>
+
+        <!-- Year Quick Switcher -->
+        <div class="control-group">
+          <label><i class="fa-solid fa-filter"></i> Filter by Year</label>
+          <div class="year-pills" id="year-pills"></div>
+        </div>
+
+        <!-- Search Box -->
+        <div class="control-group search-group">
+          <label for="search-input"><i class="fa-solid fa-magnifying-glass"></i> Search Pastor / Missionary</label>
+          <div class="search-box">
+            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+            <input type="text" id="search-input" placeholder="Search by name or number (e.g. Arana, 12)..." class="form-input">
+            <button id="clear-search" class="clear-btn" style="display: none;">&times;</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stats Overview Cards -->
+    <section class="stats-grid" id="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon purple-bg">
+          <i class="fa-solid fa-users"></i>
+        </div>
+        <div class="stat-info">
+          <span class="stat-label">Total Pastors / Missionaries</span>
+          <span class="stat-value" id="stat-total">--</span>
+          <span class="stat-sub" id="stat-quarter-title">Loading...</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon emerald-bg">
+          <i class="fa-regular fa-circle-check"></i>
+        </div>
+        <div class="stat-info">
+          <span class="stat-label" id="stat-m1-label">Month 1</span>
+          <span class="stat-value" id="stat-m1-val">--</span>
+          <div class="progress-bar"><div class="progress-fill" id="stat-m1-bar" style="width: 0%"></div></div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon emerald-bg">
+          <i class="fa-regular fa-circle-check"></i>
+        </div>
+        <div class="stat-info">
+          <span class="stat-label" id="stat-m2-label">Month 2</span>
+          <span class="stat-value" id="stat-m2-val">--</span>
+          <div class="progress-bar"><div class="progress-fill" id="stat-m2-bar" style="width: 0%"></div></div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon emerald-bg">
+          <i class="fa-regular fa-circle-check"></i>
+        </div>
+        <div class="stat-info">
+          <span class="stat-label" id="stat-m3-label">Month 3</span>
+          <span class="stat-value" id="stat-m3-val">--</span>
+          <div class="progress-bar"><div class="progress-fill" id="stat-m3-bar" style="width: 0%"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Data Management Section -->
+    <section class="table-card">
+      <div class="table-toolbar">
+        <div class="toolbar-left">
+          <h2 class="section-title" id="table-header-title">Mission Support List</h2>
+          <span class="count-badge" id="visible-count">0 items</span>
+          <span class="last-updated" id="last-updated"><i class="fa-regular fa-clock"></i> Last updated: —</span>
+          <span class="unsaved-pill" id="unsaved-pill" style="display: none;">
+            <i class="fa-solid fa-circle-dot"></i> Unsaved Changes
+          </span>
+        </div>
+        <div class="toolbar-right">
+          <!-- Save / Discard Quick Action -->
+          <button class="btn btn-sm btn-success" id="btn-quick-save" style="display: none;">
+            <i class="fa-solid fa-floppy-disk"></i> Update Changes
+          </button>
+          <!-- Bulk Action Buttons -->
+          <div class="btn-group">
+            <button class="btn btn-sm btn-ghost" id="btn-bulk-check-all" title="Mark all months as supported">
+              <i class="fa-solid fa-check-double"></i> Check All
+            </button>
+            <button class="btn btn-sm btn-ghost" id="btn-bulk-clear-all" title="Clear all marks">
+              <i class="fa-solid fa-eraser"></i> Clear All
+            </button>
+          </div>
+          <button id="btn-add-pastor" class="btn btn-primary btn-sm">
+            <i class="fa-solid fa-user-plus"></i> Add Pastor
+          </button>
+        </div>
+      </div>
+
+      <!-- Unsaved Changes Alert & Action Bar -->
+      <div class="unsaved-changes-bar" id="unsaved-changes-bar" style="display: none;">
+        <div class="unsaved-info">
+          <span class="unsaved-pulse"></span>
+          <i class="fa-solid fa-pen-to-square"></i>
+          <span id="unsaved-count-text"><strong>0 changes pending</strong></span>
+          <span class="unsaved-hint">(Revert anytime if you make a mistake)</span>
+        </div>
+        <div class="unsaved-actions">
+          <button class="btn btn-sm btn-outline" id="btn-discard-changes" title="Undo and revert all checks to last saved state">
+            <i class="fa-solid fa-rotate-left"></i> Discard / Revert
+          </button>
+          <button class="btn btn-sm btn-success" id="btn-save-changes" title="Save changes permanently to database">
+            <i class="fa-solid fa-floppy-disk"></i> Update / Save Changes
+          </button>
+        </div>
+      </div>
+
+      <!-- Pending Changes Review Panel -->
+      <div class="pending-changes-panel" id="pending-changes-panel" style="display: none;">
+        <div class="pending-panel-header">
+          <div>
+            <strong><i class="fa-solid fa-list-check"></i> Pending Changes</strong>
+            <span id="pending-panel-count">0 changes</span>
+          </div>
+          <button class="pending-panel-close" id="btn-pending-close" title="Discard pending changes">&times;</button>
+        </div>
+        <div class="pending-panel-body" id="pending-changes-list"></div>
+        <div class="pending-panel-footer">
+          <button class="btn btn-sm btn-outline" id="btn-pending-cancel"><i class="fa-solid fa-xmark"></i> Cancel</button>
+          <button class="btn btn-sm btn-success" id="btn-pending-update"><i class="fa-solid fa-check"></i> Update Selected</button>
+        </div>
+      </div>
+
+      <!-- Quick Month Check Helpers -->
+      <div class="month-bulk-bar" id="month-bulk-bar">
+        <span>Quick Month Actions:</span>
+        <button class="pill-btn" data-month="m1"><i class="fa-solid fa-check"></i> Toggle <span id="bulk-m1-name">M1</span></button>
+        <button class="pill-btn" data-month="m2"><i class="fa-solid fa-check"></i> Toggle <span id="bulk-m2-name">M2</span></button>
+        <button class="pill-btn" data-month="m3"><i class="fa-solid fa-check"></i> Toggle <span id="bulk-m3-name">M3</span></button>
+      </div>
+
+      <!-- Table Container -->
+      <div class="table-responsive">
+        <table class="data-table" id="pastors-table">
+          <thead>
+            <tr>
+              <th style="width: 70px;">#</th>
+              <th>Pastor / Missionary</th>
+              <th style="width: 140px; text-align: center;" id="th-month-1">Month 1</th>
+              <th style="width: 140px; text-align: center;" id="th-month-2">Month 2</th>
+              <th style="width: 140px; text-align: center;" id="th-month-3">Month 3</th>
+              <th style="width: 120px; text-align: center;">Status</th>
+              <th style="width: 110px; text-align: center;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="pastors-tbody">
+            <!-- Dynamic rows inserted here -->
+          </tbody>
+        </table>
+      </div>
+
+      <div id="all-quarters-view" class="all-quarters-view" style="display:none;"></div>
+
+      <div id="no-results" class="no-results" style="display: none;">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <p>No pastor or missionary found matching your search.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Add / Edit Pastor Modal -->
+  <div class="modal" id="pastor-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-pastor-title">Add Pastor / Missionary</h3>
+        <button class="modal-close" id="modal-pastor-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="pastor-form">
+          <input type="hidden" id="pastor-entry-id">
+          <div class="form-group">
+            <label for="pastor-number">Number / Order</label>
+            <input type="number" id="pastor-number" class="form-input" placeholder="e.g. 1">
+          </div>
+          <div class="form-group">
+            <label for="pastor-name">Pastor / Missionary Name <span class="required">*</span></label>
+            <input type="text" id="pastor-name" class="form-input" placeholder="e.g. Arana, Aldrich" required>
+          </div>
+          <div class="form-group">
+            <label for="pastor-notes">Notes / Remarks</label>
+            <input type="text" id="pastor-notes" class="form-input" placeholder="Optional notes (e.g. Church assignment, special support)">
+          </div>
+          <div class="form-group checkbox-group" id="group-add-all">
+            <label>
+              <input type="checkbox" id="pastor-add-all">
+              Also add this Pastor to all other active Quarters
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline" id="btn-pastor-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="btn-pastor-save">Save Pastor</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add New Quarter Modal -->
+  <div class="modal" id="quarter-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Add New Quarter</h3>
+        <button class="modal-close" id="modal-quarter-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="quarter-form">
+          <div class="form-row">
+            <div class="form-group col">
+              <label for="new-quarter-year">Year <span class="required">*</span></label>
+              <input type="number" id="new-quarter-year" class="form-input" value="2026" min="2022" max="2035" required>
+            </div>
+            <div class="form-group col">
+              <label for="new-quarter-num">Quarter <span class="required">*</span></label>
+              <select id="new-quarter-num" class="form-select" required>
+                <option value="1">1st Quarter (Jan, Feb, Mar)</option>
+                <option value="2">2nd Quarter (Apr, May, Jun)</option>
+                <option value="3">3rd Quarter (Jul, Aug, Sep)</option>
+                <option value="4" selected>4th Quarter (Oct, Nov, Dec)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="new-quarter-copy">Copy Pastor List From Existing Quarter</label>
+            <select id="new-quarter-copy" class="form-select">
+              <option value="">-- Start with Empty List --</option>
+            </select>
+            <small class="form-hint">Copies all pastor names from the selected quarter with blank checkmarks ready for the new quarter.</small>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline" id="btn-quarter-cancel">Cancel</button>
+            <button type="submit" class="btn btn-primary">Create Quarter</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audit Trail Modal -->
+  <div class="modal" id="audit-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content audit-modal-content">
+      <div class="modal-header">
+        <div>
+          <h3>Audit Trail</h3>
+          <p class="modal-subtitle">History of important changes made to the mission support records.</p>
+        </div>
+        <button class="modal-close" id="modal-audit-close">&times;</button>
+      </div>
+      <div class="audit-toolbar">
+        <input type="text" id="audit-search" class="form-input" placeholder="Search pastor, quarter, action...">
+        <select id="audit-action-filter" class="form-select">
+          <option value="">All actions</option>
+        </select>
+      </div>
+      <div class="audit-list" id="audit-list"><div class="audit-empty">Loading audit history...</div></div>
+    </div>
+  </div>
+
+  <!-- Live Projector / Presentation Modal -->
+  <div class="modal presentation-modal" id="presentation-modal">
+    <div class="modal-backdrop"></div>
+    <div class="presentation-wrapper">
+      <!-- Presentation Toolbar -->
+      <div class="presentation-controls">
+        <span class="slide-indicator" id="slide-indicator">Slide 1 of 1</span>
+        <div class="presentation-btns">
+          <button class="btn btn-sm btn-outline" id="pres-prev"><i class="fa-solid fa-chevron-left"></i> Previous</button>
+          <button class="btn btn-sm btn-outline" id="pres-next">Next <i class="fa-solid fa-chevron-right"></i></button>
+          <button class="btn btn-sm btn-primary" id="pres-download"><i class="fa-solid fa-download"></i> Download PPTX</button>
+          <button class="btn btn-sm btn-outline" id="pres-fullscreen"><i class="fa-solid fa-expand"></i> Fullscreen</button>
+          <button class="btn btn-sm btn-ghost" id="pres-close">&times; Exit</button>
+        </div>
+      </div>
+
+      <!-- Slide View Area (16:9) -->
+      <div class="slide-viewport" id="slide-viewport">
+        <div class="slide-canvas" id="slide-canvas">
+          <!-- Slide Content injected dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
