@@ -32,3 +32,24 @@ Usa ka moderno ug sayon gamiton nga CRUD Web Application para sa pagdumala sa Mi
 - Incomplete-only reporting filters completed pastors from older/completed quarters. The latest/current quarter is always shown in full so the report can show both complete and incomplete pastors.
 - The All year filter is functional and displays every available quarter; the same selection can be presented or downloaded.
 - Deleted pastors now go to a Recycle Bin. Restore returns the full record and support history to its original quarter/order; permanent deletion requires confirmation.
+
+## Login / Authentication
+
+The app now requires an authenticated session before mission-support data can be accessed.
+
+### Initial Admin Account
+
+- Username: `jarred`
+- Password: the initial password provided by the project owner
+- Role: Admin
+
+The password is **not stored in plaintext**. On first authentication/session check, the default admin account is created with a salted `scrypt` password hash inside the database. Sessions are stored server-side in the same Neon JSONB state and use an HttpOnly cookie.
+
+This release intentionally does **not** add public signup, Staff accounts, or Supporter accounts yet. Those can be added after the permission/assignment workflow is finalized.
+
+### Important security behavior
+
+- Mission-support API endpoints require an authenticated session.
+- Reset-to-original-data requires Admin role.
+- Admin passwords cannot be viewed in plaintext.
+- Sessions expire after 7 days.

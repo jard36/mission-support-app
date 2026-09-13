@@ -12,6 +12,24 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body class="purple-theme">
+<div id="login-screen" class="login-screen">
+  <div class="login-card">
+    <div class="login-logo-wrap"><img src="images/logo.png" alt="Living Hope Baptist Church" class="login-logo"></div>
+    <div class="login-brand">
+      <h1>Mission Support Tracker</h1>
+      <p>Living Hope Baptist Church</p>
+    </div>
+    <form id="login-form" class="login-form" autocomplete="on">
+      <label for="login-username">Username</label>
+      <div class="login-input-wrap"><i class="fa-solid fa-user"></i><input id="login-username" name="username" type="text" autocomplete="username" placeholder="Enter username" required></div>
+      <label for="login-password">Password</label>
+      <div class="login-input-wrap"><i class="fa-solid fa-lock"></i><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required></div>
+      <div id="login-error" class="login-error" role="alert" style="display:none"></div>
+      <button type="submit" id="btn-login" class="btn btn-primary login-btn"><i class="fa-solid fa-right-to-bracket"></i> Sign In</button>
+    </form>
+    <button type="button" id="btn-open-signup" class="login-link-btn">Create Supporter Account</button><p class="login-note">Staff accounts are created/approved by Admin. Supporter accounts require assignment confirmation.</p>
+  </div>
+</div>
   <!-- Top Navigation Header -->
   <header class="app-header">
     <div class="header-container">
@@ -32,6 +50,10 @@
         <button id="btn-download-pptx" class="btn btn-primary">
           <i class="fa-solid fa-file-powerpoint"></i> Download PPT
         </button>
+        <div class="header-user" id="header-user" style="display:none">
+          <span class="header-user-role" id="header-user-role">ADMIN</span>
+          <span class="header-user-name" id="header-user-name">—</span>
+        </div>
         <div class="dropdown">
           <button class="btn btn-outline" id="btn-more-options">
             <i class="fa-solid fa-ellipsis-vertical"></i>
@@ -40,15 +62,19 @@
             <a href="#" id="action-download-all"><i class="fa-solid fa-download"></i> Download All Quarters (.pptx)</a>
             <a href="#" id="action-backup-json"><i class="fa-solid fa-database"></i> Export Backup (.json)</a>
             <a href="#" id="action-add-quarter"><i class="fa-solid fa-calendar-plus"></i> Add New Quarter</a>
+            <a href="#" id="action-user-management"><i class="fa-solid fa-users-gear"></i> User Management</a>
             <a href="#" id="action-audit-trail"><i class="fa-solid fa-clock-rotate-left"></i> Audit Trail</a>
             <a href="#" id="action-recycle-bin"><i class="fa-solid fa-trash-can-arrow-up"></i> Recycle Bin</a>
             <div class="divider"></div>
+            <a href="#" id="action-logout"><i class="fa-solid fa-right-from-bracket"></i> Sign Out</a>
             <a href="#" id="action-reset-data" class="text-danger"><i class="fa-solid fa-rotate-left"></i> Reset to Original PPT Data</a>
           </div>
         </div>
       </div>
     </div>
   </header>
+
+  <div id="supporter-pending-screen" class="supporter-pending-screen" style="display:none"><div class="pending-card"><i class="fa-solid fa-hourglass-half"></i><h2>Waiting for Confirmation</h2><p>Your supporter account has been created. Admin/Staff still needs to assign the pastor you support.</p><span class="pending-status">Pending Assignment</span><button class="btn btn-outline" id="btn-pending-refresh">Check Again</button></div></div>
 
   <!-- Main Container -->
   <main class="main-content">
@@ -257,6 +283,28 @@
     </section>
   </main>
 
+  <!-- Supporter Signup Modal -->
+  <div class="modal" id="signup-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content auth-modal-content">
+      <div class="modal-header">
+        <div><h3>Create Supporter Account</h3><p class="modal-subtitle">Your account will remain pending until Admin/Staff confirms which pastor you support.</p></div>
+        <button class="modal-close" id="modal-signup-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="signup-form">
+          <div class="form-group"><label>Full Name <span class="required">*</span></label><input name="name" class="form-input" required></div>
+          <div class="form-group"><label>Username <span class="required">*</span></label><input name="username" class="form-input" autocomplete="username" required></div><div class="form-group" id="signup-role-group" style="display:none"><label>Account Type</label><select name="role" id="signup-role" class="form-select"><option value="supporter">Supporter / Viewer</option><option value="staff">Staff</option></select></div>
+          <div class="form-row"><div class="form-group col"><label>Email</label><input name="email" type="email" class="form-input" autocomplete="email"></div><div class="form-group col"><label>Phone Number</label><input name="phone" type="tel" class="form-input" autocomplete="tel"></div></div>
+          <small class="form-hint">Provide at least an email address or phone number.</small>
+          <div class="form-row"><div class="form-group col"><label>Password <span class="required">*</span></label><input name="password" type="password" minlength="8" class="form-input" autocomplete="new-password" required></div><div class="form-group col"><label>Confirm Password <span class="required">*</span></label><input name="confirmPassword" type="password" minlength="8" class="form-input" autocomplete="new-password" required></div></div>
+          <div id="signup-error" class="login-error" style="display:none"></div>
+          <div class="modal-footer"><button type="button" class="btn btn-outline" id="btn-signup-cancel">Cancel</button><button type="submit" class="btn btn-primary" id="btn-signup-submit">Create Account</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <!-- Add / Edit Pastor Modal -->
   <div class="modal" id="pastor-modal">
     <div class="modal-backdrop"></div>
@@ -432,6 +480,18 @@
   </div>
 
   <!-- Live Projector / Presentation Modal -->
+  <!-- User Management Modal -->
+  <div class="modal" id="user-management-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content user-management-content">
+      <div class="modal-header"><div><h3>User Management</h3><p class="modal-subtitle">Create accounts, approve supporters, assign pastors, and manage access.</p></div><button class="modal-close" id="modal-user-management-close">&times;</button></div>
+      <div class="modal-body">
+        <div class="user-management-toolbar"><button class="btn btn-primary btn-sm" id="btn-create-user"><i class="fa-solid fa-user-plus"></i> Create Account</button><input id="user-search" class="form-input" placeholder="Search users..."></div>
+        <div id="user-management-list" class="user-management-list"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal presentation-modal" id="presentation-modal">
     <div class="modal-backdrop"></div>
     <div class="presentation-wrapper">

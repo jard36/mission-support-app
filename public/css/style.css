@@ -1475,3 +1475,70 @@ body {
   .recycle-actions { width:100%; }
   .recycle-actions .btn { flex:1; }
 }
+
+/* ==========================================================================\n   AUTHENTICATION\n   ========================================================================== */
+body.auth-locked { overflow: hidden; }
+body.auth-locked > *:not(#login-screen) { visibility: hidden; }
+.login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(135deg, rgba(35, 18, 73, .98), rgba(79, 46, 133, .96));
+}
+.login-card {
+  width: min(420px, 100%);
+  padding: 34px 32px 28px;
+  border-radius: 24px;
+  background: rgba(255,255,255,.98);
+  box-shadow: 0 24px 80px rgba(0,0,0,.28);
+}
+.login-logo-wrap { display:flex; justify-content:center; margin-bottom:14px; }
+.login-logo { width:88px; height:88px; object-fit:contain; border-radius:18px; }
+.login-brand { text-align:center; margin-bottom:24px; }
+.login-brand h1 { margin:0; font-size:24px; font-weight:800; color:#24143f; }
+.login-brand p { margin:6px 0 0; color:#756b84; font-size:14px; }
+.login-form { display:flex; flex-direction:column; gap:8px; }
+.login-form label { font-size:13px; font-weight:700; color:#3b3150; margin-top:5px; }
+.login-input-wrap { position:relative; }
+.login-input-wrap i { position:absolute; left:14px; top:50%; transform:translateY(-50%); color:#8c8199; pointer-events:none; }
+.login-input-wrap input { width:100%; box-sizing:border-box; padding:13px 14px 13px 40px; border:1px solid #ddd6e5; border-radius:12px; font:inherit; outline:none; transition:.2s; }
+.login-input-wrap input:focus { border-color:#7c4dbe; box-shadow:0 0 0 3px rgba(124,77,190,.12); }
+.login-btn { width:100%; justify-content:center; margin-top:12px; min-height:46px; }
+.login-error { padding:10px 12px; border-radius:10px; background:#fff0f0; color:#b42318; font-size:13px; margin-top:8px; }
+.login-note { margin:18px 0 0; text-align:center; font-size:12px; color:#8b8294; }
+.header-user { display:flex; align-items:center; gap:8px; padding:0 10px; }
+.header-user-role { font-size:10px; font-weight:800; letter-spacing:.08em; padding:4px 7px; border-radius:999px; background:#eee5fb; color:#6941a5; }
+.header-user-name { font-size:13px; font-weight:700; color:var(--text-primary, #34283f); }
+@media (max-width: 720px) {
+  .login-card { padding:28px 22px 24px; }
+  .header-user { display:none !important; }
+}
+
+/* Authentication + User Management */
+.login-link-btn { background:none; border:0; color:#C4B5FD; cursor:pointer; font:inherit; font-weight:700; margin-top:10px; }
+.login-link-btn:hover { text-decoration:underline; }
+.auth-modal-content { max-width:720px; }
+.user-management-content { max-width:1000px; }
+.user-management-toolbar { display:flex; gap:10px; margin-bottom:16px; }
+.user-management-toolbar .form-input { flex:1; }
+.user-management-list { display:grid; gap:10px; max-height:55vh; overflow:auto; }
+.user-row { border:1px solid var(--border-color); border-radius:12px; padding:14px; background:var(--bg-card-hover); display:grid; grid-template-columns:1.3fr 1.4fr 1fr auto; gap:12px; align-items:center; }
+.user-row-main strong { display:block; }
+.user-row-main small { color:var(--text-muted); }
+.user-meta { color:var(--text-muted); font-size:.82rem; }
+.user-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.user-status { display:inline-flex; padding:3px 8px; border-radius:999px; font-size:.72rem; font-weight:800; }
+.user-status.active { background:var(--emerald-bg); color:#6EE7B7; }
+.user-status.pending_assignment { background:var(--amber-bg); color:#FCD34D; }
+.user-status.disabled { background:var(--rose-bg); color:#FDA4AF; }
+.supporter-pending-screen { min-height:calc(100vh - 90px); display:flex; align-items:center; justify-content:center; padding:30px; }
+.pending-card { max-width:520px; text-align:center; background:var(--bg-card); border:1px solid var(--border-color); border-radius:20px; padding:42px; box-shadow:var(--shadow-lg); }
+.pending-card > i { font-size:42px; color:#A78BFA; margin-bottom:18px; }
+.pending-card h2 { margin-bottom:10px; }
+.pending-card p { color:var(--text-muted); margin-bottom:18px; }
+.pending-status { display:inline-block; padding:7px 14px; border-radius:999px; background:var(--amber-bg); color:#FCD34D; font-weight:800; font-size:.8rem; margin-bottom:18px; }
+@media (max-width:800px) { .user-row { grid-template-columns:1fr; } .user-actions { justify-content:flex-start; } .user-management-toolbar { flex-direction:column; } }

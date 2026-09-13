@@ -2,6 +2,8 @@
 // MISSION SUPPORT TRACKER - FRONTEND ENGINE
 // ==========================================================================
 
+let currentUser = null;
+
 let state = {
   quarters: [],
   currentQuarter: null,
@@ -62,15 +64,166 @@ const quarterModal = document.getElementById('quarter-modal');
 const presentationModal = document.getElementById('presentation-modal');
 const reportModal = document.getElementById('report-modal');
 const recycleBinModal = document.getElementById('recycle-bin-modal');
+const signupModal = document.getElementById('signup-modal');
+const userManagementModal = document.getElementById('user-management-modal');
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
-  setupEventListeners();
-  renderPendingChanges();
-  await loadQuartersList();
+  document.body.classList.add('auth-locked');
+  setupAuthListeners();
+  await checkAuthSession();
 });
 
+function setupAuthListeners() {
+  const form = document.getElementById('login-form');
+  if (form) form.addEventListener('submit', handleLogin);
+  document.getElementById('btn-open-signup')?.addEventListener('click', () => openSignupModal(false));
+  document.getElementById('modal-signup-close')?.addEventListener('click', closeSignupModal);
+  document.getElementById('btn-signup-cancel')?.addEventListener('click', closeSignupModal);
+  document.getElementById('signup-form')?.addEventListener('submit', handleSignup);
+  document.getElementById('btn-pending-refresh')?.addEventListener('click', refreshMyAccount);
+  const logout = document.getElementById('action-logout');
+  if (logout) logout.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await signOut();
+  });
+}
+
+async function checkAuthSession() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (!res.ok) throw new Error('not authenticated');
+    const data = await res.json();
+    if (!data.authenticated) throw new Error('not authenticated');
+    enterAuthenticatedApp(data.user);
+  } catch (err) {
+    showLoginScreen();
+  }
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const username = form.username.value.trim();
+  const password = form.password.value;
+  const button = document.getElementById('btn-login');
+  const error = document.getElementById('login-error');
+  error.style.display = 'none';
+  button.disabled = true;
+  button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in...';
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Invalid username or password.');
+    form.reset();
+    enterAuthenticatedApp(data.user);
+  } catch (err) {
+    error.textContent = err.message;
+    error.style.display = 'block';
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Sign In';
+  }
+}
+
+function showLoginScreen() {
+  document.body.classList.add('auth-locked');
+  const screen = document.getElementById('login-screen');
+  if (screen) screen.style.display = 'flex';
+}
+
+function enterAuthenticatedApp(user) {
+  currentUser = user;
+  document.body.classList.remove('auth-locked');
+  const screen = document.getElementById('login-screen');
+  if (screen) screen.style.display = 'none';
+  const name = document.getElementById('header-user-name');
+  const role = document.getElementById('header-user-role');
+  const badge = document.getElementById('header-user');
+  if (name) name.textContent = user?.name || user?.username || 'User';
+  if (role) role.textContent = String(user?.role || 'user').toUpperCase();
+  if (badge) badge.style.display = 'flex';
+  applyRoleUi();
+  setupEventListeners();
+  renderPendingChanges();
+  if (user?.role === 'supporter' && user?.status !== 'active') {
+    showSupporterPending(true);
+  } else {
+    showSupporterPending(false);
+    loadQuartersList().catch(err => console.error('Initial load failed:', err));
+  }
+}
+
+function applyRoleUi() {
+  const supporter = currentUser?.role === 'supporter';
+  const staff = ['admin','staff'].includes(currentUser?.role);
+  document.body.classList.toggle('supporter-mode', supporter);
+  const management = document.getElementById('action-user-management');
+  if (management) management.style.display = staff ? '' : 'none';
+  ['action-add-quarter','action-audit-trail','action-recycle-bin','action-backup-json','action-reset-data'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = staff ? '' : 'none';
+  });
+  ['btn-add-pastor','btn-save-changes','btn-quick-save','btn-discard-changes','month-bulk-bar'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
+  });
+  const report = document.getElementById('btn-report');
+  if (report) report.style.display = supporter ? 'none' : '';
+  const typeFilter = document.getElementById('pastor-type-filter');
+  const status = document.getElementById('status-filter');
+  if (typeFilter) typeFilter.style.display = supporter ? 'none' : '';
+  if (status) status.style.display = supporter ? 'none' : '';
+  const toolbarTitle = document.getElementById('table-header-title');
+  if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastor';
+}
+
+function showSupporterPending(show) {
+  const pending = document.getElementById('supporter-pending-screen');
+  const main = document.querySelector('main.main-content');
+  const header = document.querySelector('.app-header');
+  if (pending) pending.style.display = show ? 'flex' : 'none';
+  if (main) main.style.display = show ? 'none' : '';
+  if (header) header.style.display = show ? 'flex' : '';
+}
+
+async function refreshMyAccount() {
+  try {
+    const res = await fetch('/api/auth/me');
+    const data = await res.json();
+    if (data.authenticated) enterAuthenticatedApp(data.user);
+  } catch (err) { console.error(err); }
+}
+
+async function signOut() {
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+  currentUser = null;
+  state.pendingChanges = {};
+  const badge = document.getElementById('header-user');
+  if (badge) badge.style.display = 'none';
+  showLoginScreen();
+}
+
+let eventsInitialized = false;
+
+// If a server-side session expires, return to the login screen instead of leaving a blank/erroring app.
+const originalFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await originalFetch(...args);
+  const input = args[0];
+  const url = typeof input === 'string' ? input : (input?.url || '');
+  if (response.status === 401 && !url.includes('/api/auth/')) {
+    showLoginScreen();
+  }
+  return response;
+};
+
+
 function setupEventListeners() {
+  if (eventsInitialized) return;
+  eventsInitialized = true;
   // Quarter selector change
   quarterSelect.addEventListener('change', async (e) => {
     if (hasPendingChanges()) {
@@ -127,6 +280,11 @@ function setupEventListeners() {
     dropdownMenu.classList.remove('show');
   });
 
+  document.getElementById('action-user-management')?.addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openUserManagement(); });
+  document.getElementById('modal-user-management-close')?.addEventListener('click', closeUserManagement);
+  document.getElementById('btn-create-user')?.addEventListener('click', () => openSignupModal(true));
+  document.getElementById('user-search')?.addEventListener('input', renderUserManagement);
+  
   // Add Pastor Modal triggers
   document.getElementById('btn-add-pastor').addEventListener('click', () => {
     openPastorModal();
@@ -251,6 +409,91 @@ function setupEventListeners() {
     }
   });
 }
+
+
+// --- Authentication / User Management ---
+function openSignupModal(adminCreate = false) {
+  if (!signupModal) return;
+  const form = document.getElementById('signup-form');
+  const title = signupModal.querySelector('h3');
+  const subtitle = signupModal.querySelector('.modal-subtitle');
+  const roleGroup = document.getElementById('signup-role-group');
+  if (adminCreate && !['admin','staff'].includes(currentUser?.role)) return;
+  if (title) title.textContent = adminCreate ? 'Create User Account' : 'Create Supporter Account';
+  if (subtitle) subtitle.textContent = adminCreate ? 'Admin/Staff can create accounts. Supporters remain pending until assigned.' : 'Your account will remain pending until Admin/Staff confirms which pastor you support.';
+  if (roleGroup) roleGroup.style.display = adminCreate ? '' : 'none';
+  if (form) form.dataset.adminCreate = adminCreate ? '1' : '0';
+  signupModal.classList.add('show');
+}
+function closeSignupModal() { signupModal?.classList.remove('show'); const f=document.getElementById('signup-form'); if(f){f.reset();f.dataset.adminCreate='0';} const e=document.getElementById('signup-error'); if(e)e.style.display='none'; }
+async function handleSignup(e) {
+  e.preventDefault();
+  const form=e.currentTarget, adminCreate=form.dataset.adminCreate==='1';
+  const fd=new FormData(form); const payload=Object.fromEntries(fd.entries());
+  if (payload.password !== payload.confirmPassword) return showAuthFormError('signup-error','Passwords do not match.');
+  delete payload.confirmPassword;
+  const btn=document.getElementById('btn-signup-submit'); if(btn){btn.disabled=true;btn.textContent='Creating...';}
+  try {
+    const url=adminCreate ? '/api/auth/users' : '/api/auth/signup';
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(data.error||'Unable to create account.');
+    closeSignupModal();
+    if(adminCreate){ showToast('Account created successfully.','success'); await openUserManagement(); }
+    else { showToast('Account created. Please wait for assignment confirmation.','success'); }
+  } catch(err){ showAuthFormError('signup-error',err.message); }
+  finally { if(btn){btn.disabled=false;btn.textContent='Create Account';} }
+}
+function showAuthFormError(id,msg){const el=document.getElementById(id);if(el){el.textContent=msg;el.style.display='block';}}
+async function openUserManagement(){
+  if(!userManagementModal || !['admin','staff'].includes(currentUser?.role)) return;
+  userManagementModal.classList.add('show');
+  await loadUsers();
+}
+function closeUserManagement(){userManagementModal?.classList.remove('show');}
+let managedUsers=[];
+async function loadUsers(){
+  try{const res=await fetch('/api/auth/users');const data=await res.json();if(!res.ok)throw new Error(data.error||'Unable to load users');managedUsers=data.users||[];renderUserManagement();}
+  catch(err){showToast(err.message,'error');}
+}
+function renderUserManagement(){
+  const list=document.getElementById('user-management-list'); if(!list)return;
+  const q=(document.getElementById('user-search')?.value||'').toLowerCase().trim();
+  const users=managedUsers.filter(u=>!q||[u.name,u.username,u.email,u.phone,u.role,u.status,u.assignedPastor?.name].join(' ').toLowerCase().includes(q));
+  if(!users.length){list.innerHTML='<div class="audit-empty">No users found.</div>';return;}
+  list.innerHTML=users.map(u=>{
+    const assignment=u.assignedPastor?.name ? `Assigned: ${escapeHtml(u.assignedPastor.name)}` : 'No pastor assigned';
+    const canDelete=currentUser?.role==='admin' && u.role!=='admin';
+    return `<div class="user-row"><div class="user-row-main"><strong>${escapeHtml(u.name||u.username)}</strong><small>@${escapeHtml(u.username)}</small></div><div class="user-meta">${escapeHtml(u.email||'No email')}<br>${escapeHtml(u.phone||'No phone')}</div><div class="user-meta"><b>${escapeHtml(String(u.role).toUpperCase())}</b><br><span class="user-status ${escapeHtml(u.status)}">${escapeHtml(u.status.replace('_',' '))}</span><br>${assignment}</div><div class="user-actions">${u.role==='supporter' ? `<button class="btn btn-sm btn-primary" onclick="assignSupporter('${u.id}')">${u.assignedPastor?'Change Pastor':'Assign Pastor'}</button>${u.assignedPastor?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign</button>`:''}`:''}<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')">Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')">Reset Password</button>${canDelete?`<button class="btn btn-sm btn-outline text-danger" onclick="deleteManagedUser('${u.id}')">Delete</button>`:''}</div></div>`;
+  }).join('');
+}
+async function getPastorChoices(){
+  const res=await fetch('/api/quarters'); const data=await res.json(); if(!res.ok)throw new Error(data.error||'Unable to load pastors');
+  const latest=data.quarters?.[data.quarters.length-1]; if(!latest) return [];
+  const qr=await fetch(`/api/quarters/${latest.id}`); const q=await qr.json(); if(!qr.ok)throw new Error(q.error||'Unable to load pastors');
+  return q.entries||[];
+}
+async function assignSupporter(id){
+  try{
+    const user=managedUsers.find(x=>x.id===id); const pastors=await getPastorChoices();
+    if(!pastors.length)return showToast('No pastors available to assign.','error');
+    const menu=pastors.map((p,i)=>`${i+1}. ${p.number ? p.number+'. ' : ''}${p.name}`).join('\n');
+    const raw=prompt(`Select the pastor for ${user?.name||'this supporter'} by number:\n\n${menu}`); if(!raw)return;
+    const idx=parseInt(raw,10)-1; if(!Number.isInteger(idx)||!pastors[idx])return showToast('Invalid pastor selection.','error');
+    const p=pastors[idx]; const res=await fetch(`/api/auth/users/${id}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.name,number:p.number})});
+    const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed'); showToast('Supporter assigned successfully.','success'); await loadUsers();
+  }catch(err){showToast(err.message,'error');}
+}
+async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await fetch(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
+async function editManagedUser(id){
+  const u=managedUsers.find(x=>x.id===id); if(!u)return;
+  const name=prompt('Full name:',u.name||''); if(name===null)return;
+  const email=prompt('Email:',u.email||''); if(email===null)return;
+  const phone=prompt('Phone:',u.phone||''); if(phone===null)return;
+  try{const res=await fetch(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,phone})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Update failed');showToast('User updated.','success');await loadUsers();}catch(err){showToast(err.message,'error');}
+}
+async function resetManagedPassword(id){const p=prompt('Enter a new password (minimum 8 characters):');if(!p)return;if(p.length<8)return showToast('Password must be at least 8 characters.','error');try{const res=await fetch(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Password reset failed');showToast('Password reset successfully.','success');}catch(err){showToast(err.message,'error');}}
+async function deleteManagedUser(id){if(!confirm('Delete this account? This cannot be undone.'))return;try{const res=await fetch(`/api/auth/users/${id}`,{method:'DELETE'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Delete failed');showToast('User deleted.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
 
 // --- API Calls & Data Loading ---
 async function loadQuartersList() {
@@ -586,11 +829,11 @@ function renderTable() {
         <td style="text-align: center;">${renderStatusBtn(e, 'm2')}</td>
         <td style="text-align: center;">${renderStatusBtn(e, 'm3')}</td>
         <td style="text-align: center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td>
-        <td style="text-align: center;">
-          <div class="actions-cell">
+        <td style="text-align: center;" class="pastor-actions-column">
+          ${currentUser?.role === 'supporter' ? '<span class="user-meta">View only</span>' : `<div class="actions-cell">
             <button class="action-icon-btn btn-edit" title="Edit Pastor" onclick="editPastor('${e.id}')"><i class="fa-solid fa-pen-to-square"></i></button>
             <button class="action-icon-btn btn-delete" title="Move to Recycle Bin" onclick="deletePastor('${e.id}')"><i class="fa-regular fa-trash-can"></i></button>
-          </div>
+          </div>`}
         </td>
       </tr>`;
   });
@@ -642,8 +885,14 @@ function serializeLetterStatuses(items) {
   return items.map(x => `${x.letter}. ${x.checked ? '✓' : ''}`.trimEnd()).join(' ');
 }
 
+function compactStatusForViewer(value) { return String(value || '').replace(/\s+/g,' ').trim(); }
+
 function renderStatusBtn(entry, monthKey) {
   const val = getEffectiveStatus(entry, monthKey);
+  if (currentUser?.role === 'supporter') {
+    const text = compactStatusForViewer(val);
+    return `<span class="viewer-status-text">${escapeHtml(text || '—')}</span>`;
+  }
   const pending = isPending(entry.id, monthKey);
 
   // Custom A/B/C/D/E statuses get individual compact checkboxes.

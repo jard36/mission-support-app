@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const pptxgen = require('pptxgenjs');
 
 const app = express();
@@ -20,6 +21,344 @@ app.get('/', (req, res) => {
 
 const { readDB, writeDB, resetDB, getDatabaseMode } = require('./db');
 
+
+// --------------------------------------------------------------------------
+// Authentication
+// --------------------------------------------------------------------------
+const SESSION_COOKIE = 'mission_support_session';
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+const DEFAULT_ADMIN_USERNAME = 'jarred';
+// The initial admin password is only used once to create a secure hash.
+// The plaintext password is never stored in the database.
+const DEFAULT_ADMIN_SALT = 'cbc870a4360a4dd4be1db150150baf16';
+const DEFAULT_ADMIN_HASH = 'b0ae490cfc530472c95ed07ea2cc8f7ca97b864eb5e9fab3135637ff03e6321cc653ce36a3e42da04254e1ec62c584b01e8b82a2f8ffd413477233f73be8e6e4';
+
+function ensureAuthState(db) {
+  if (!Array.isArray(db.users)) db.users = [];
+  if (!Array.isArray(db.sessions)) db.sessions = [];
+  return db;
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return { salt, hash };
+}
+
+function verifyPassword(password, record) {
+  if (!record?.passwordHash || !record?.passwordSalt) return false;
+  const candidate = crypto.scryptSync(String(password), record.passwordSalt, 64);
+  const stored = Buffer.from(record.passwordHash, 'hex');
+  return candidate.length === stored.length && crypto.timingSafeEqual(candidate, stored);
+}
+
+function sanitizeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    role: user.role,
+    status: user.status,
+    email: user.email || '',
+    phone: user.phone || '',
+    createdAt: user.createdAt
+  };
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || '';
+  return header.split(';').reduce((out, part) => {
+    const i = part.indexOf('=');
+    if (i < 0) return out;
+    const key = part.slice(0, i).trim();
+    const value = decodeURIComponent(part.slice(i + 1).trim());
+    if (key) out[key] = value;
+    return out;
+  }, {});
+}
+
+function setSessionCookie(res, token) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+}
+
+async function ensureDefaultAdmin() {
+  const db = ensureAuthState(await readDB());
+  const existing = db.users.find(u => String(u.username || '').toLowerCase() === DEFAULT_ADMIN_USERNAME);
+  if (existing) return db;
+
+  const credentials = { salt: DEFAULT_ADMIN_SALT, hash: DEFAULT_ADMIN_HASH };
+  db.users.push({
+    id: `user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+    username: DEFAULT_ADMIN_USERNAME,
+    name: 'Jarred',
+    role: 'admin',
+    status: 'active',
+    email: '',
+    phone: '',
+    passwordSalt: credentials.salt,
+    passwordHash: credentials.hash,
+    createdAt: new Date().toISOString()
+  });
+  await writeDB(db);
+  return db;
+}
+
+async function getAuthenticatedUser(req) {
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (!token) return null;
+  const db = ensureAuthState(await readDB());
+  const now = Date.now();
+  db.sessions = db.sessions.filter(s => new Date(s.expiresAt).getTime() > now);
+  const session = db.sessions.find(s => s.tokenHash === crypto.createHash('sha256').update(token).digest('hex'));
+  if (!session) return null;
+  const user = db.users.find(u => u.id === session.userId && u.status === 'active');
+  if (!user) return null;
+  return user;
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required.' });
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error('Auth middleware error:', err);
+    res.status(500).json({ error: 'Authentication service error.' });
+  }
+}
+
+async function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  next();
+}
+
+function requireStaff(req, res, next) {
+  if (!['admin', 'staff'].includes(req.user?.role)) return res.status(403).json({ error: 'Staff access required.' });
+  next();
+}
+
+function normalizePastorKey(name, number) {
+  return `${String(number ?? '').trim()}::${String(name || '').trim().toLowerCase()}`;
+}
+
+function getSupporterEntryFilter(user) {
+  if (user?.role !== 'supporter') return () => true;
+  const assigned = user.assignedPastor || {};
+  if (!assigned.name) return () => false;
+  const key = normalizePastorKey(assigned.name, assigned.number);
+  return (entry) => normalizePastorKey(entry.name, entry.number) === key ||
+    (String(entry.name || '').trim().toLowerCase() === String(assigned.name).trim().toLowerCase() && (!assigned.number || String(entry.number || '') === String(assigned.number)));
+}
+
+function filterQuarterForUser(q, user) {
+  if (user?.role !== 'supporter') return q;
+  return { ...q, entries: (q.entries || []).filter(getSupporterEntryFilter(user)) };
+}
+
+// Login/session endpoints remain public. All mission data APIs below are protected.
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    let db = await ensureDefaultAdmin();
+    db = ensureAuthState(db);
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '');
+    const user = db.users.find(u => String(u.username || '').toLowerCase() === username.toLowerCase());
+
+    if (!user || user.status !== 'active' || !verifyPassword(password, user)) {
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    db.sessions.push({
+      id: `session-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      userId: user.id,
+      tokenHash: crypto.createHash('sha256').update(rawToken).digest('hex'),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString()
+    });
+    // Keep only the newest 100 sessions.
+    db.sessions = db.sessions.slice(-100);
+    await writeDB(db);
+    setSessionCookie(res, rawToken);
+    res.json({ user: sanitizeUser(user) });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Unable to sign in.' });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    await ensureDefaultAdmin();
+    const user = await getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ authenticated: false });
+    res.json({ authenticated: true, user: sanitizeUser(user) });
+  } catch (err) {
+    console.error('Auth session check error:', err);
+    res.status(500).json({ error: 'Unable to check session.' });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const token = parseCookies(req)[SESSION_COOKIE];
+    if (token) {
+      const db = ensureAuthState(await readDB());
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      db.sessions = db.sessions.filter(s => s.tokenHash !== tokenHash);
+      await writeDB(db);
+    }
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch (err) {
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  }
+});
+
+// --------------------------------------------------------------------------
+// Account creation and user management
+// --------------------------------------------------------------------------
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    let db = ensureAuthState(await readDB());
+    const name = String(req.body?.name || '').trim();
+    const username = String(req.body?.username || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const phone = String(req.body?.phone || '').trim();
+    const password = String(req.body?.password || '');
+    if (!name || !username || !password || (!email && !phone)) {
+      return res.status(400).json({ error: 'Name, username, password, and at least an email or phone number are required.' });
+    }
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    const usernameTaken = db.users.some(u => String(u.username || '').toLowerCase() === username.toLowerCase());
+    const emailTaken = email && db.users.some(u => String(u.email || '').toLowerCase() === email);
+    if (usernameTaken || emailTaken) return res.status(409).json({ error: 'Username or email is already registered.' });
+    const credentials = hashPassword(password);
+    const user = {
+      id: `user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      username, name, role: 'supporter', status: 'pending_assignment', email, phone,
+      assignedPastor: null, passwordSalt: credentials.salt, passwordHash: credentials.hash,
+      createdAt: new Date().toISOString()
+    };
+    db.users.push(user);
+    await writeDB(db);
+    res.status(201).json({ user: sanitizeUser(user), message: 'Account created. Please wait for Admin/Staff assignment confirmation.' });
+  } catch (err) {
+    console.error('Signup error:', err);
+    res.status(500).json({ error: 'Unable to create account.' });
+  }
+});
+
+app.get('/api/auth/users', requireAuth, requireStaff, async (req, res) => {
+  try {
+    const db = ensureAuthState(await readDB());
+    res.json({ users: db.users.map(sanitizeUser) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/users', requireAuth, requireStaff, async (req, res) => {
+  try {
+    const db = ensureAuthState(await readDB());
+    const name = String(req.body?.name || '').trim();
+    const username = String(req.body?.username || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const phone = String(req.body?.phone || '').trim();
+    const role = ['staff','supporter'].includes(req.body?.role) ? req.body.role : 'supporter';
+    if (role === 'staff' && req.user.role !== 'admin') return res.status(403).json({ error: 'Only Admin can create Staff accounts.' });
+    const password = String(req.body?.password || '');
+    if (!name || !username || !password || (!email && !phone)) return res.status(400).json({ error: 'Name, username, password, and email or phone are required.' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    if (db.users.some(u => String(u.username || '').toLowerCase() === username.toLowerCase())) return res.status(409).json({ error: 'Username is already registered.' });
+    if (email && db.users.some(u => String(u.email || '').toLowerCase() === email)) return res.status(409).json({ error: 'Email is already registered.' });
+    const credentials = hashPassword(password);
+    const user = { id:`user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`, username, name, role, status: role === 'staff' ? 'active' : 'pending_assignment', email, phone, assignedPastor: null, passwordSalt: credentials.salt, passwordHash: credentials.hash, createdAt:new Date().toISOString() };
+    db.users.push(user);
+    addAudit(db, req, 'USER_CREATED', { userId:user.id, username:user.username, role:user.role });
+    await writeDB(db);
+    res.status(201).json({ user:sanitizeUser(user) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/auth/users/:id', requireAuth, requireStaff, async (req, res) => {
+  try {
+    const db = ensureAuthState(await readDB());
+    const user = db.users.find(u => u.id === req.params.id);
+    if (!user) return res.status(404).json({ error:'User not found.' });
+    if (user.role === 'admin' && req.user.id !== user.id) return res.status(403).json({ error:'Admin account cannot be edited by another user here.' });
+    if (req.body?.name !== undefined) user.name = String(req.body.name).trim();
+    if (req.body?.email !== undefined) user.email = String(req.body.email).trim().toLowerCase();
+    if (req.body?.phone !== undefined) user.phone = String(req.body.phone).trim();
+    if (req.body?.status && ['active','disabled','pending_assignment'].includes(req.body.status)) user.status = req.body.status;
+    if (req.body?.role && req.user.role === 'admin' && ['staff','supporter'].includes(req.body.role)) user.role = req.body.role;
+    if (req.body?.password) {
+      if (String(req.body.password).length < 8) return res.status(400).json({ error:'Password must be at least 8 characters.' });
+      const credentials = hashPassword(req.body.password); user.passwordSalt=credentials.salt; user.passwordHash=credentials.hash;
+    }
+    addAudit(db, req, 'USER_UPDATED', { userId:user.id, username:user.username });
+    await writeDB(db);
+    res.json({ user:sanitizeUser(user) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, res) => {
+  try {
+    const db = ensureAuthState(await readDB());
+    const user = db.users.find(u => u.id === req.params.id && u.role === 'supporter');
+    if (!user) return res.status(404).json({ error:'Supporter not found.' });
+    const name = String(req.body?.name || '').trim();
+    const number = String(req.body?.number ?? '').trim();
+    if (!name) return res.status(400).json({ error:'Pastor name is required.' });
+    user.assignedPastor = { name, number };
+    user.status = 'active';
+    addAudit(db, req, 'SUPPORTER_ASSIGNED', { userId:user.id, username:user.username, pastor:name, pastorNumber:number });
+    await writeDB(db);
+    res.json({ user:sanitizeUser(user) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/users/:id/unassign', requireAuth, requireStaff, async (req, res) => {
+  try {
+    const db = ensureAuthState(await readDB());
+    const user = db.users.find(u => u.id === req.params.id && u.role === 'supporter');
+    if (!user) return res.status(404).json({ error:'Supporter not found.' });
+    user.assignedPastor = null; user.status = 'pending_assignment';
+    addAudit(db, req, 'SUPPORTER_UNASSIGNED', { userId:user.id, username:user.username });
+    await writeDB(db);
+    res.json({ user:sanitizeUser(user) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const db = ensureAuthState(await readDB());
+    const idx = db.users.findIndex(u => u.id === req.params.id);
+    if (idx < 0) return res.status(404).json({ error:'User not found.' });
+    if (db.users[idx].role === 'admin') return res.status(400).json({ error:'Admin accounts cannot be deleted.' });
+    const [user] = db.users.splice(idx,1);
+    db.sessions = db.sessions.filter(s => s.userId !== user.id);
+    addAudit(db, req, 'USER_DELETED', { userId:user.id, username:user.username });
+    await writeDB(db);
+    res.json({ ok:true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    res.json({ ok: true, mode: getDatabaseMode(), quarters: db.quarters.length, latestQuarter: db.quarters.at(-1)?.id || null });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.use('/api', requireAuth);
+
 function ensureAuditTrail(db) {
   if (!Array.isArray(db.auditTrail)) db.auditTrail = [];
   return db.auditTrail;
@@ -30,7 +369,7 @@ function addAudit(db, req, action, details = {}) {
   auditTrail.unshift({
     id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     timestamp: new Date().toISOString(),
-    actor: req.body?.actor || req.headers['x-user-name'] || 'Local User',
+    actor: req.user?.name || req.user?.username || 'Local User',
     action,
     ...details
   });
@@ -109,10 +448,11 @@ app.get('/api/quarters', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const summary = db.quarters.map(q => {
-      const total = q.entries.length;
-      const countM1 = q.entries.filter(e => e.m1 && e.m1.includes('✓')).length;
-      const countM2 = q.entries.filter(e => e.m2 && e.m2.includes('✓')).length;
-      const countM3 = q.entries.filter(e => e.m3 && e.m3.includes('✓')).length;
+      const visibleEntries = q.entries.filter(getSupporterEntryFilter(req.user));
+      const total = visibleEntries.length;
+      const countM1 = visibleEntries.filter(e => e.m1 && e.m1.includes('✓')).length;
+      const countM2 = visibleEntries.filter(e => e.m2 && e.m2.includes('✓')).length;
+      const countM3 = visibleEntries.filter(e => e.m3 && e.m3.includes('✓')).length;
       return {
         id: q.id,
         year: q.year,
@@ -144,14 +484,14 @@ app.get('/api/quarters/:id', async (req, res) => {
     const db = normalizeDB(await readDB());
     const q = db.quarters.find(x => x.id === req.params.id);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
-    res.json(q);
+    res.json(filterQuarterForUser(q, req.user));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // 3. POST new quarter
-app.post('/api/quarters', async (req, res) => {
+app.post('/api/quarters', requireStaff, async (req, res) => {
   try {
     const { year, quarterNum, copyFromQuarterId } = req.body;
     if (!year || !quarterNum) return res.status(400).json({ error: 'Year and Quarter Number are required' });
@@ -215,7 +555,7 @@ app.post('/api/quarters', async (req, res) => {
 });
 
 // 4. DELETE quarter
-app.delete('/api/quarters/:id', async (req, res) => {
+app.delete('/api/quarters/:id', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const idx = db.quarters.findIndex(q => q.id === req.params.id);
@@ -230,7 +570,7 @@ app.delete('/api/quarters/:id', async (req, res) => {
 });
 
 // 5. POST new Pastor to quarter
-app.post('/api/quarters/:quarterId/entries', async (req, res) => {
+app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
   try {
     const { name, number, m1, m2, m3, notes, pastorType, addToAllQuarters } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Pastor name is required' });
@@ -288,7 +628,7 @@ app.post('/api/quarters/:quarterId/entries', async (req, res) => {
 });
 
 // 6. PUT update Pastor entry
-app.put('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
+app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, res) => {
   try {
     const { name, number, m1, m2, m3, notes, pastorType } = req.body;
     const db = normalizeDB(await readDB());
@@ -333,7 +673,7 @@ app.put('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
 });
 
 // 7. DELETE Pastor entry
-app.delete('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
+app.delete('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
@@ -360,7 +700,7 @@ app.delete('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
 });
 
 // 8. POST bulk update support status
-app.post('/api/quarters/:quarterId/bulk', async (req, res) => {
+app.post('/api/quarters/:quarterId/bulk', requireStaff, async (req, res) => {
   try {
     const { monthKey, action } = req.body; // monthKey: 'm1' | 'm2' | 'm3' | 'all', action: 'check' | 'uncheck'
     const db = normalizeDB(await readDB());
@@ -389,7 +729,7 @@ app.post('/api/quarters/:quarterId/bulk', async (req, res) => {
 });
 
 // 8b. POST batch save entries updates
-app.post('/api/quarters/:quarterId/batch-save', async (req, res) => {
+app.post('/api/quarters/:quarterId/batch-save', requireStaff, async (req, res) => {
   try {
     const { updates } = req.body; // updates: [{ id, m1, m2, m3, notes }]
     if (!Array.isArray(updates)) return res.status(400).json({ error: 'Updates array is required' });
@@ -437,7 +777,7 @@ app.post('/api/quarters/:quarterId/batch-save', async (req, res) => {
 });
 
 // 9. Recycle Bin
-app.get('/api/recycle-bin', async (req, res) => {
+app.get('/api/recycle-bin', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     res.json({ recycleBin: db.recycleBin || [], lastUpdated: db.lastUpdated || null });
@@ -446,7 +786,7 @@ app.get('/api/recycle-bin', async (req, res) => {
   }
 });
 
-app.post('/api/recycle-bin/:entryId/restore', async (req, res) => {
+app.post('/api/recycle-bin/:entryId/restore', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const bin = ensureRecycleBin(db);
@@ -476,7 +816,7 @@ app.post('/api/recycle-bin/:entryId/restore', async (req, res) => {
   }
 });
 
-app.delete('/api/recycle-bin/:entryId', async (req, res) => {
+app.delete('/api/recycle-bin/:entryId', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const bin = ensureRecycleBin(db);
@@ -492,7 +832,7 @@ app.delete('/api/recycle-bin/:entryId', async (req, res) => {
 });
 
 // 10. GET audit trail
-app.get('/api/audit-trail', async (req, res) => {
+app.get('/api/audit-trail', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     res.json({ auditTrail: db.auditTrail || [], lastUpdated: db.lastUpdated || null });
@@ -502,7 +842,7 @@ app.get('/api/audit-trail', async (req, res) => {
 });
 
 // 9. Reset DB to original backup
-app.post('/api/reset', async (req, res) => {
+app.post('/api/reset', requireAdmin, async (req, res) => {
   try {
     const db = normalizeDB(await resetDB());
     addAudit(db, req, 'Database Reset', { description: 'Database was reset to the original PowerPoint reference data' });
@@ -514,14 +854,7 @@ app.post('/api/reset', async (req, res) => {
 });
 
 // 10. Health/status endpoint
-app.get('/api/health', async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    res.json({ ok: true, database: getDatabaseMode(), quarters: db.quarters?.length || 0, lastUpdated: db.lastUpdated || null });
-  } catch (err) {
-    res.status(500).json({ ok: false, database: getDatabaseMode(), error: err.message });
-  }
-});
+
 
 // 11. PPTX Generator Function
 function compactPptStatus(value) {
@@ -661,7 +994,7 @@ async function buildPptx(quarterList, filters = {}) {
 app.get('/api/export/pptx/:quarterId', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
-    const q = db.quarters.find(x => x.id === req.params.quarterId);
+    const q = filterQuarterForUser(db.quarters.find(x => x.id === req.params.quarterId), req.user);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
 
     const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
@@ -706,7 +1039,8 @@ app.get('/api/export/pptx-all', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
-    const pptx = await buildPptx(db.quarters, { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
+    const visibleQuarters = req.user?.role === 'supporter' ? db.quarters.map(q => filterQuarterForUser(q, req.user)) : db.quarters;
+    const pptx = await buildPptx(visibleQuarters, { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
     const buffer = await pptx.write({ outputType: 'nodebuffer' });
     const filename = 'Mission_Support_All_Quarters.pptx';
 
@@ -720,7 +1054,7 @@ app.get('/api/export/pptx-all', async (req, res) => {
 });
 
 // 13. Download JSON backup
-app.get('/api/backup', async (req, res) => {
+app.get('/api/backup', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     res.setHeader('Content-Type', 'application/json');
