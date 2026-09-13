@@ -176,8 +176,17 @@ function applyRoleUi() {
   if (report) report.style.display = supporter ? 'none' : '';
   const typeFilter = document.getElementById('pastor-type-filter');
   const status = document.getElementById('status-filter');
+  const quarterControl = document.getElementById('quarter-select')?.closest('.control-group');
+  const yearControl = document.getElementById('year-pills')?.closest('.control-group');
+  const searchControl = document.getElementById('search-input')?.closest('.control-group');
   if (typeFilter) typeFilter.style.display = supporter ? 'none' : '';
   if (status) status.style.display = supporter ? 'none' : '';
+  if (quarterControl) quarterControl.style.display = supporter ? 'none' : '';
+  if (yearControl) yearControl.style.display = supporter ? 'none' : '';
+  if (searchControl) searchControl.style.display = supporter ? 'none' : '';
+  ['btn-present','btn-download-pptx','btn-bulk-check-all','btn-bulk-clear-all','btn-exit-report','btn-add-pastor','btn-quick-save','btn-save-changes','btn-discard-changes','month-bulk-bar'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
+  });
   const toolbarTitle = document.getElementById('table-header-title');
   if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastor';
 }
@@ -416,6 +425,8 @@ function setupEventListeners() {
 // --- Authentication / User Management ---
 function openSignupModal(adminCreate = false) {
   if (!signupModal) return;
+  // When Admin launches account creation from User Management, close that modal first.
+  if (adminCreate) closeUserManagement();
   // Public supporter signup must appear above the login screen.
   // Keep the login screen in place so closing signup returns to login.
   signupModal.style.zIndex = '100000';
