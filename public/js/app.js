@@ -13,6 +13,11 @@ let state = {
   lastUpdated: null,
   auditTrail: [],
   pendingChanges: {},
+  pastorTypeFilter: 'All',
+  statusFilter: 'All',
+  reportMode: false,
+  reportQuarters: [],
+  reportFilters: { pastorType: 'All', statusFilter: 'All' },
   presentation: {
     slides: [],
     currentSlideIndex: 0
@@ -23,6 +28,8 @@ let state = {
 const quarterSelect = document.getElementById('quarter-select');
 const yearPills = document.getElementById('year-pills');
 const searchInput = document.getElementById('search-input');
+const pastorTypeFilter = document.getElementById('pastor-type-filter');
+const statusFilter = document.getElementById('status-filter');
 const clearSearchBtn = document.getElementById('clear-search');
 const pastorsTbody = document.getElementById('pastors-tbody');
 const visibleCount = document.getElementById('visible-count');
@@ -53,6 +60,8 @@ const tableHeaderTitle = document.getElementById('table-header-title');
 const pastorModal = document.getElementById('pastor-modal');
 const quarterModal = document.getElementById('quarter-modal');
 const presentationModal = document.getElementById('presentation-modal');
+const reportModal = document.getElementById('report-modal');
+const recycleBinModal = document.getElementById('recycle-bin-modal');
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
@@ -73,7 +82,10 @@ function setupEventListeners() {
       discardPendingChanges();
     }
     state.allMode = false;
+    state.reportMode = false;
+    state.reportQuarters = [];
     toggleAllView(false);
+    updateReportModeUi();
     await loadQuarterDetails(e.target.value);
   });
 
@@ -88,7 +100,19 @@ function setupEventListeners() {
     searchInput.value = '';
     state.searchQuery = '';
     clearSearchBtn.style.display = 'none';
-    renderTable();
+    if (state.allMode) renderAllView(); else renderTable();
+  });
+
+  pastorTypeFilter.addEventListener('change', () => {
+    state.pastorTypeFilter = pastorTypeFilter.value;
+    if (state.reportMode) state.reportFilters.pastorType = state.pastorTypeFilter;
+    if (state.allMode) renderAllView(); else renderTable();
+  });
+
+  statusFilter.addEventListener('change', () => {
+    state.statusFilter = statusFilter.value;
+    if (state.reportMode) state.reportFilters.statusFilter = state.statusFilter;
+    if (state.allMode) renderAllView(); else renderTable();
   });
 
   // More options dropdown toggle
@@ -149,19 +173,22 @@ function setupEventListeners() {
 
   // Download PPTX triggers
   document.getElementById('btn-download-pptx').addEventListener('click', () => {
-    if (state.allMode) {
+    if (state.reportMode && state.reportQuarters.length) {
+      downloadReportPptx();
+    } else if (state.allMode) {
       showToast('Preparing complete all-quarters PowerPoint presentation...', 'info');
-      window.location.href = '/api/export/pptx-all';
+      window.location.href = `/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
     } else if (state.currentQuarter) {
       showToast('Preparing PowerPoint presentation for download...', 'info');
-      window.location.href = `/api/export/pptx/${state.currentQuarter.id}`;
+      const qs = new URLSearchParams({ pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter });
+      window.location.href = `/api/export/pptx/${state.currentQuarter.id}?${qs.toString()}`;
     }
   });
 
   document.getElementById('action-download-all').addEventListener('click', (e) => {
     e.preventDefault();
     showToast('Preparing complete 14-quarter presentation...', 'info');
-    window.location.href = '/api/export/pptx-all';
+    window.location.href = `/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
   });
 
   document.getElementById('action-backup-json').addEventListener('click', (e) => {
@@ -184,14 +211,27 @@ function setupEventListeners() {
     }
   });
 
+  // Report + Recycle Bin
+  document.getElementById('btn-report').addEventListener('click', openReportModal);
+  document.getElementById('btn-exit-report').addEventListener('click', exitReportMode);
+  document.getElementById('modal-report-close').addEventListener('click', closeReportModal);
+  document.getElementById('btn-report-cancel').addEventListener('click', closeReportModal);
+  document.getElementById('report-select-all').addEventListener('click', () => setAllReportQuarters(true));
+  document.getElementById('report-clear-all').addEventListener('click', () => setAllReportQuarters(false));
+  document.getElementById('btn-report-view').addEventListener('click', applyReportView);
+  document.getElementById('btn-report-download').addEventListener('click', downloadReportPptx);
+  document.getElementById('action-recycle-bin').addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openRecycleBinModal(); });
+  document.getElementById('modal-recycle-close').addEventListener('click', closeRecycleBinModal);
+
   // Presentation Mode triggers
   document.getElementById('btn-present').addEventListener('click', openPresentationMode);
   document.getElementById('pres-close').addEventListener('click', closePresentationMode);
   document.getElementById('pres-prev').addEventListener('click', prevSlide);
   document.getElementById('pres-next').addEventListener('click', nextSlide);
   document.getElementById('pres-download').addEventListener('click', () => {
-    if (state.allMode) window.location.href = '/api/export/pptx-all';
-    else if (state.currentQuarter) window.location.href = `/api/export/pptx/${state.currentQuarter.id}`;
+    if (state.reportMode && state.reportQuarters.length) downloadReportPptx();
+    else if (state.allMode) window.location.href = `/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
+    else if (state.currentQuarter) window.location.href = `/api/export/pptx/${state.currentQuarter.id}?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
   });
   document.getElementById('pres-fullscreen').addEventListener('click', toggleFullscreen);
   document.getElementById('modal-audit-close').addEventListener('click', closeAuditModal);
@@ -218,6 +258,9 @@ async function loadQuartersList() {
     const res = await fetch('/api/quarters');
     const data = await res.json();
     state.quarters = data.quarters || [];
+    state.reportMode = false;
+    state.reportQuarters = [];
+    updateReportModeUi();
     updateLastUpdated(data.lastUpdated);
 
     renderYearPills();
@@ -277,12 +320,18 @@ function renderYearPills() {
       populateQuarterDropdown();
 
       if (y === 'all') {
+        state.reportMode = false;
+        state.reportQuarters = [];
+        updateReportModeUi();
         state.allMode = true;
         state.currentQuarter = null;
         quarterSelect.value = 'ALL';
         toggleAllView(true);
         await loadAllQuarterDetails();
       } else {
+        state.reportMode = false;
+        state.reportQuarters = [];
+        updateReportModeUi();
         state.allMode = false;
         toggleAllView(false);
         // Select the latest quarter available in that year.
@@ -356,8 +405,10 @@ function toggleAllView(show) {
   const quick = document.getElementById('month-bulk-bar');
   const bulk = document.getElementById('btn-bulk-check-all')?.closest('.btn-group');
   const add = document.getElementById('btn-add-pastor');
+  const stats = document.getElementById('stats-grid');
   if (table?.closest('.table-responsive')) table.closest('.table-responsive').style.display = show ? 'none' : '';
   if (allView) allView.style.display = show ? 'block' : 'none';
+  if (stats) stats.style.display = show ? 'none' : '';
   if (quick) quick.style.display = show ? 'none' : '';
   if (bulk) bulk.style.display = show ? 'none' : '';
   if (add) add.style.display = show ? 'none' : '';
@@ -367,51 +418,34 @@ function toggleAllView(show) {
   }
 }
 
-function renderAllStats() {
-  const qs = state.allQuarters || [];
-  const totalEntries = qs.reduce((sum, q) => sum + (q.entries?.length || 0), 0);
-  const supported = ['m1','m2','m3'].map(k => qs.reduce((sum,q) => sum + (q.entries||[]).filter(e => String(e[k]||'').trim() !== '').length, 0));
-  statTotal.textContent = totalEntries;
-  statQuarterTitle.textContent = 'ALL YEARS • ALL QUARTERS';
-  const labels = ['Quarter 1', 'Quarter 2', 'Quarter 3'];
-  const bars = [statM1Bar, statM2Bar, statM3Bar];
-  const vals = [statM1Val, statM2Val, statM3Val];
-  const labs = [statM1Label, statM2Label, statM3Label];
-  labels.forEach((label,i) => {
-    labs[i].textContent = label;
-    const q = qs.filter(x => x.quarterNum === i+1);
-    const count = q.reduce((sum,x) => sum + (x.entries?.length || 0), 0);
-    const checks = q.reduce((sum,x) => sum + (x.entries||[]).filter(e => String(e.m1||'').trim() !== '').length, 0);
-    const pct = count ? Math.round(checks/count*100) : 0;
-    vals[i].textContent = `${checks} / ${count} (${pct}%)`;
-    bars[i].style.width = `${pct}%`;
-  });
-}
-
 function renderAllView() {
   const container = document.getElementById('all-quarters-view');
   if (!container) return;
-  const query = state.searchQuery;
-  if (!state.allQuarters.length) {
-    container.innerHTML = '<div class="all-empty">No quarter records available.</div>';
-    return;
-  }
+  if (!state.allQuarters.length) { container.innerHTML = '<div class="all-empty">No quarter records available.</div>'; return; }
   let html = '';
   state.allQuarters.forEach(q => {
-    let entries = q.entries || [];
-    if (query) entries = entries.filter(e => (e.name||'').toLowerCase().includes(query) || String(e.number||'').includes(query));
+    const entries = filterEntriesForDisplay(q, q.entries || []);
     if (!entries.length) return;
     html += `<div class="all-quarter-card">
-      <div class="all-quarter-heading"><div><strong>${escapeHtml(q.title)}</strong><span>${escapeHtml((q.months||[]).join(' • '))}</span></div><span>${entries.length} pastors</span></div>
-      <div class="table-responsive"><table class="data-table all-quarter-table"><thead><tr><th style="width:70px;">#</th><th>Pastor / Missionary</th>${(q.months||[]).slice(0,3).map(m=>`<th style="text-align:center;">${escapeHtml(m).toUpperCase()}</th>`).join('')}<th style="text-align:center;">STATUS</th></tr></thead><tbody>`;
+      <div class="all-quarter-heading"><div><strong>${escapeHtml(q.title)}</strong><span>${escapeHtml((q.months||[]).join(' • '))}</span></div><span>${entries.length} of ${(q.entries||[]).length} pastors</span></div>
+      <div class="table-responsive"><table class="data-table all-quarter-table"><thead><tr><th style="width:70px;">#</th><th>Pastor / Missionary</th><th>TYPE</th>${(q.months||[]).slice(0,3).map(m=>`<th style="text-align:center;">${escapeHtml(m).toUpperCase()}</th>`).join('')}<th style="text-align:center;">STATUS</th></tr></thead><tbody>`;
     entries.forEach((e,idx) => {
-      const vals=[e.m1,e.m2,e.m3]; const checks=vals.filter(v=>String(v||'').trim()!=='').length;
-      const badge=checks===3?'3/3 Full':checks?`${checks}/3 Partial`:'0/3 None';
-      html += `<tr><td>${e.number || idx+1}</td><td><strong>${escapeHtml(e.name)}</strong></td>${vals.map(v=>`<td class="all-status-cell">${escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${checks===3?'full':checks?'partial':'none'}">${badge}</span></td></tr>`;
+      const vals=[e.m1,e.m2,e.m3]; const badge=renderStatusBadge(e); const type=normalizePastorType(e.pastorType);
+      html += `<tr><td>${e.number || idx+1}</td><td><strong>${escapeHtml(e.name)}</strong></td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
     });
     html += '</tbody></table></div></div>';
   });
-  container.innerHTML = html || '<div class="all-empty">No records match your search.</div>';
+  container.innerHTML = html || '<div class="all-empty">No records match your filters.</div>';
+}
+
+function renderAllStats() {
+  const qs = state.allQuarters || [];
+  statTotal.textContent = qs.reduce((sum, q) => sum + filterEntriesForDisplay(q, q.entries || []).length, 0);
+  statQuarterTitle.textContent = state.reportMode ? 'MISSION REPORT VIEW' : 'ALL YEARS • ALL QUARTERS';
+  const names = qs.map(q => q.months || []).flat();
+  const labels = [names[0] || 'Month 1', names[1] || 'Month 2', names[2] || 'Month 3'];
+  const bars = [statM1Bar, statM2Bar, statM3Bar]; const vals=[statM1Val,statM2Val,statM3Val]; const labs=[statM1Label,statM2Label,statM3Label];
+  labels.forEach((label,i) => { labs[i].textContent=label; const entries=qs.flatMap(q=>filterEntriesForDisplay(q,q.entries||[])); const metrics=entries.reduce((a,e)=>{const m=statusMetrics(e[`m${i+1}`]);a.checked+=m.checked;a.total+=m.total;return a;},{checked:0,total:0}); const pct=metrics.total?Math.round(metrics.checked/metrics.total*100):0; vals[i].textContent=`${metrics.checked} / ${metrics.total} (${pct}%)`; bars[i].style.width=`${pct}%`; });
 }
 
 function renderQuarterStats() {
@@ -420,57 +454,40 @@ function renderQuarterStats() {
   const entries = q.entries || [];
   const total = entries.length;
 
-  const countM1 = entries.filter(e => { const v = getEffectiveStatus(e, 'm1'); return v && v.trim() !== ''; }).length;
-  const countM2 = entries.filter(e => { const v = getEffectiveStatus(e, 'm2'); return v && v.trim() !== ''; }).length;
-  const countM3 = entries.filter(e => { const v = getEffectiveStatus(e, 'm3'); return v && v.trim() !== ''; }).length;
-
-  const pct1 = total ? Math.round((countM1 / total) * 100) : 0;
-  const pct2 = total ? Math.round((countM2 / total) * 100) : 0;
-  const pct3 = total ? Math.round((countM3 / total) * 100) : 0;
+  const monthMetrics = ['m1', 'm2', 'm3'].map(key => entries.reduce((acc, e) => {
+    const m = statusMetrics(getEffectiveStatus(e, key));
+    acc.checked += m.checked;
+    acc.total += m.total;
+    return acc;
+  }, { checked: 0, total: 0 }));
 
   statTotal.textContent = total;
   statQuarterTitle.textContent = q.title;
-
   const mNames = q.months || ['Month 1', 'Month 2', 'Month 3'];
-  statM1Label.textContent = mNames[0] || 'Month 1';
-  statM1Val.textContent = `${countM1} / ${total} (${pct1}%)`;
-  statM1Bar.style.width = `${pct1}%`;
+  [
+    [statM1Label, statM1Val, statM1Bar, mNames[0], monthMetrics[0]],
+    [statM2Label, statM2Val, statM2Bar, mNames[1], monthMetrics[1]],
+    [statM3Label, statM3Val, statM3Bar, mNames[2], monthMetrics[2]]
+  ].forEach(([label, val, bar, name, metric]) => {
+    const pct = metric.total ? Math.round(metric.checked / metric.total * 100) : 0;
+    label.textContent = name || 'Month';
+    val.textContent = `${metric.checked} / ${metric.total} (${pct}%)`;
+    bar.style.width = `${pct}%`;
+  });
 
-  statM2Label.textContent = mNames[1] || 'Month 2';
-  statM2Val.textContent = `${countM2} / ${total} (${pct2}%)`;
-  statM2Bar.style.width = `${pct2}%`;
-
-  statM3Label.textContent = mNames[2] || 'Month 3';
-  statM3Val.textContent = `${countM3} / ${total} (${pct3}%)`;
-  statM3Bar.style.width = `${pct3}%`;
-
-  // Headers in table & bulk bar
   thMonth1.textContent = (mNames[0] || 'M1').toUpperCase();
   thMonth2.textContent = (mNames[1] || 'M2').toUpperCase();
   thMonth3.textContent = (mNames[2] || 'M3').toUpperCase();
-
   bulkM1Name.textContent = mNames[0] || 'M1';
   bulkM2Name.textContent = mNames[1] || 'M2';
   bulkM3Name.textContent = mNames[2] || 'M3';
-
   tableHeaderTitle.textContent = `${q.year} ${q.quarterName} Support Records`;
 }
 
 function renderTable() {
   if (!state.currentQuarter) return;
   const entries = state.currentQuarter.entries || [];
-
-  // Filter by search query
-  let filtered = entries;
-  if (state.searchQuery) {
-    filtered = entries.filter(e => {
-      const q = state.searchQuery;
-      return (e.name && e.name.toLowerCase().includes(q)) ||
-             (e.number && e.number.toString().includes(q)) ||
-             (e.notes && e.notes.toLowerCase().includes(q));
-    });
-  }
-
+  const filtered = filterEntriesForDisplay(state.currentQuarter, entries);
   state.filteredEntries = filtered;
   visibleCount.textContent = `${filtered.length} of ${entries.length} pastors`;
 
@@ -481,55 +498,32 @@ function renderTable() {
   }
 
   noResults.style.display = 'none';
-
   let html = '';
   filtered.forEach((e, idx) => {
-    // Count checks
-    let checks = 0;
-    if (getEffectiveStatus(e, 'm1').trim() !== '') checks++;
-    if (getEffectiveStatus(e, 'm2').trim() !== '') checks++;
-    if (getEffectiveStatus(e, 'm3').trim() !== '') checks++;
-
-    let badgeClass = 'none';
-    let badgeText = '0/3 None';
-    if (checks === 3) { badgeClass = 'full'; badgeText = '3/3 Full'; }
-    else if (checks > 0) { badgeClass = 'partial'; badgeText = `${checks}/3 Partial`; }
-
+    const badge = renderStatusBadge(e);
+    const type = normalizePastorType(e.pastorType);
     html += `
-      <tr data-id="${e.id}">
+      <tr data-id="${escapeHtml(e.id)}">
         <td style="color: var(--text-subtle); font-weight: 700;">${e.number || (idx + 1)}</td>
         <td>
           <div class="pastor-name-cell">
             <span>${escapeHtml(e.name)}</span>
+            <span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span>
             ${e.notes ? `<span class="pastor-note-pill" title="${escapeHtml(e.notes)}"><i class="fa-regular fa-note-sticky"></i> ${escapeHtml(e.notes)}</span>` : ''}
           </div>
         </td>
-        <td style="text-align: center;">
-          ${renderStatusBtn(e, 'm1')}
-        </td>
-        <td style="text-align: center;">
-          ${renderStatusBtn(e, 'm2')}
-        </td>
-        <td style="text-align: center;">
-          ${renderStatusBtn(e, 'm3')}
-        </td>
-        <td style="text-align: center;">
-          <span class="status-badge ${badgeClass}">${badgeText}</span>
-        </td>
+        <td style="text-align: center;">${renderStatusBtn(e, 'm1')}</td>
+        <td style="text-align: center;">${renderStatusBtn(e, 'm2')}</td>
+        <td style="text-align: center;">${renderStatusBtn(e, 'm3')}</td>
+        <td style="text-align: center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td>
         <td style="text-align: center;">
           <div class="actions-cell">
-            <button class="action-icon-btn btn-edit" title="Edit Pastor" onclick="editPastor('${e.id}')">
-              <i class="fa-solid fa-pen-to-square"></i>
-            </button>
-            <button class="action-icon-btn btn-delete" title="Delete Pastor" onclick="deletePastor('${e.id}')">
-              <i class="fa-regular fa-trash-can"></i>
-            </button>
+            <button class="action-icon-btn btn-edit" title="Edit Pastor" onclick="editPastor('${e.id}')"><i class="fa-solid fa-pen-to-square"></i></button>
+            <button class="action-icon-btn btn-delete" title="Move to Recycle Bin" onclick="deletePastor('${e.id}')"><i class="fa-regular fa-trash-can"></i></button>
           </div>
         </td>
-      </tr>
-    `;
+      </tr>`;
   });
-
   pastorsTbody.innerHTML = html;
 }
 
@@ -791,6 +785,7 @@ window.editPastor = function(entryId) {
   document.getElementById('pastor-entry-id').value = entry.id;
   document.getElementById('pastor-number').value = entry.number || '';
   document.getElementById('pastor-name').value = entry.name || '';
+  document.getElementById('pastor-type').value = normalizePastorType(entry.pastorType);
   document.getElementById('pastor-notes').value = entry.notes || '';
   document.getElementById('group-add-all').style.display = 'none';
 
@@ -802,6 +797,7 @@ function openPastorModal() {
   document.getElementById('pastor-form').reset();
   document.getElementById('pastor-entry-id').value = '';
   document.getElementById('pastor-number').value = (state.currentQuarter?.entries?.length || 0) + 1;
+  document.getElementById('pastor-type').value = 'Unassigned';
   document.getElementById('group-add-all').style.display = 'block';
 
   pastorModal.classList.add('show');
@@ -818,6 +814,7 @@ async function handlePastorSubmit(e) {
   const entryId = document.getElementById('pastor-entry-id').value;
   const name = document.getElementById('pastor-name').value.trim();
   const number = document.getElementById('pastor-number').value;
+  const pastorType = document.getElementById('pastor-type').value;
   const notes = document.getElementById('pastor-notes').value.trim();
   const addToAll = document.getElementById('pastor-add-all').checked;
 
@@ -826,7 +823,7 @@ async function handlePastorSubmit(e) {
     return;
   }
 
-  const payload = { name, number, notes, addToAllQuarters: addToAll };
+  const payload = { name, number, pastorType, notes, addToAllQuarters: addToAll };
 
   try {
     if (entryId) {
@@ -881,7 +878,7 @@ window.deletePastor = async function(entryId) {
     state.currentQuarter.entries = state.currentQuarter.entries.filter(e => e.id !== entryId);
     state.currentQuarter.entries.forEach((e, i) => { e.number = i + 1; });
 
-    showToast('Pastor removed successfully', 'success');
+    showToast('Pastor moved to Recycle Bin', 'success');
     renderQuarterStats();
     renderTable();
   } catch (err) {
@@ -938,6 +935,151 @@ async function handleQuarterSubmit(e) {
   }
 }
 
+// --- Mission Report Builder ---
+function openReportModal() {
+  const list = document.getElementById('report-quarter-list');
+  const latestId = state.quarters.length ? state.quarters[state.quarters.length - 1].id : null;
+  const selected = new Set(state.reportQuarters.length ? state.reportQuarters : (state.currentQuarter ? [state.currentQuarter.id] : latestId ? [latestId] : []));
+  document.getElementById('report-pastor-type').value = state.reportFilters.pastorType || state.pastorTypeFilter || 'All';
+  document.getElementById('report-status-filter').value = state.reportFilters.statusFilter || state.statusFilter || 'All';
+  list.innerHTML = state.quarters.map(q => `
+    <label class="report-quarter-option">
+      <input type="checkbox" value="${escapeHtml(q.id)}" ${selected.has(q.id) ? 'checked' : ''}>
+      <span><strong>${escapeHtml(q.year + ' ' + q.quarterName)}</strong><small>${escapeHtml((q.months||[]).join(', '))} • ${q.totalPastors || 0} pastors</small></span>
+    </label>`).join('');
+  reportModal.classList.add('show');
+}
+
+function closeReportModal() { reportModal.classList.remove('show'); }
+function setAllReportQuarters(checked) { document.querySelectorAll('#report-quarter-list input[type="checkbox"]').forEach(cb => cb.checked = checked); }
+function getSelectedReportQuarters() { return [...document.querySelectorAll('#report-quarter-list input[type="checkbox"]:checked')].map(cb => cb.value); }
+
+async function getReportQuarterDetails(ids) {
+  const details = await Promise.all(ids.map(async id => {
+    const res = await fetch(`/api/quarters/${id}`);
+    if (!res.ok) throw new Error(`Failed to load ${id}`);
+    return res.json();
+  }));
+  return details;
+}
+
+function getReportFilteredEntries(q, entries, pastorType, statusFilter) {
+  let out = entries || [];
+  if (pastorType !== 'All') out = out.filter(e => normalizePastorType(e.pastorType) === pastorType);
+  if (statusFilter !== 'All' && !isLatestQuarter(q)) {
+    out = out.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
+  }
+  return out;
+}
+
+async function applyReportView() {
+  const ids = getSelectedReportQuarters();
+  if (!ids.length) { showToast('Select at least one quarter for the report.', 'error'); return; }
+  state.reportQuarters = ids;
+  state.reportFilters = {
+    pastorType: document.getElementById('report-pastor-type').value,
+    statusFilter: document.getElementById('report-status-filter').value
+  };
+  state.pastorTypeFilter = state.reportFilters.pastorType;
+  state.statusFilter = state.reportFilters.statusFilter;
+  pastorTypeFilter.value = state.pastorTypeFilter;
+  statusFilter.value = state.statusFilter;
+  state.allMode = true;
+  state.reportMode = true;
+  state.currentQuarter = null;
+  state.activeYear = null;
+  quarterSelect.innerHTML = '<option value="ALL">Mission Report — Selected Quarters</option>';
+  quarterSelect.value = 'ALL';
+  updateYearPillsActive();
+  state.allQuarters = await getReportQuarterDetails(ids);
+  toggleAllView(true);
+  renderAllView();
+  renderAllStats();
+  updateReportModeUi();
+  closeReportModal();
+  showToast(`Report view applied to ${ids.length} quarter${ids.length === 1 ? '' : 's'}.`, 'success');
+}
+
+function downloadReportPptx() {
+  const ids = state.reportMode ? state.reportQuarters : getSelectedReportQuarters();
+  if (!ids.length) { showToast('Select at least one quarter for the report.', 'error'); return; }
+  const pastorType = state.reportMode ? state.reportFilters.pastorType : document.getElementById('report-pastor-type').value;
+  const status = state.reportMode ? state.reportFilters.statusFilter : document.getElementById('report-status-filter').value;
+  const params = new URLSearchParams({ quarterIds: ids.join(','), pastorType, statusFilter: status });
+  showToast('Preparing mission report PowerPoint...', 'info');
+  window.location.href = `/api/export/pptx-report?${params.toString()}`;
+}
+
+function updateReportModeUi() {
+  const exit = document.getElementById('btn-exit-report');
+  if (exit) exit.style.display = state.reportMode ? 'inline-flex' : 'none';
+}
+
+function exitReportMode() {
+  state.reportMode = false;
+  state.reportQuarters = [];
+  state.reportFilters = { pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter };
+  state.allMode = false;
+  toggleAllView(false);
+  updateReportModeUi();
+  const latest = state.quarters[state.quarters.length - 1];
+  if (latest) { state.activeYear = latest.year; populateQuarterDropdown(); quarterSelect.value = latest.id; loadQuarterDetails(latest.id); }
+}
+
+// --- Recycle Bin ---
+async function openRecycleBinModal() {
+  recycleBinModal.classList.add('show');
+  const list = document.getElementById('recycle-list');
+  list.innerHTML = '<div class="audit-empty">Loading deleted records...</div>';
+  try {
+    const res = await fetch('/api/recycle-bin');
+    if (!res.ok) throw new Error('Failed to load Recycle Bin');
+    const data = await res.json();
+    renderRecycleBin(data.recycleBin || []);
+  } catch (err) {
+    list.innerHTML = `<div class="audit-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function closeRecycleBinModal() { recycleBinModal.classList.remove('show'); }
+
+function renderRecycleBin(items) {
+  const list = document.getElementById('recycle-list');
+  if (!items.length) { list.innerHTML = '<div class="audit-empty">Recycle Bin is empty.</div>'; return; }
+  list.innerHTML = items.map(item => {
+    const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown date';
+    return `<div class="recycle-item">
+      <div class="recycle-main"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.deletedFromQuarterTitle || item.deletedFromQuarterId || 'Unknown quarter')} • ${escapeHtml(normalizePastorType(item.pastorType))}</span><small>Deleted ${escapeHtml(when)}</small></div>
+      <div class="recycle-actions"><button class="btn btn-sm btn-secondary" onclick="restorePastor('${escapeHtml(item.id)}')"><i class="fa-solid fa-rotate-left"></i> Restore</button><button class="btn btn-sm btn-danger" onclick="permanentlyDeletePastor('${escapeHtml(item.id)}')"><i class="fa-solid fa-trash"></i></button></div>
+    </div>`;
+  }).join('');
+}
+
+window.restorePastor = async function(entryId) {
+  if (!confirm('Restore this pastor to the original quarter with all previous support data?')) return;
+  try {
+    const res = await fetch(`/api/recycle-bin/${encodeURIComponent(entryId)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to restore pastor');
+    showToast(`${data.restored.name} restored successfully.`, 'success');
+    await openRecycleBinModal();
+    await loadQuartersList();
+    const target = state.quarters.find(q => q.id === data.quarterId);
+    if (target) { state.activeYear = target.year; state.allMode = false; state.reportMode = false; toggleAllView(false); updateReportModeUi(); quarterSelect.value = target.id; await loadQuarterDetails(target.id); }
+  } catch (err) { showToast('Restore failed: ' + err.message, 'error'); }
+};
+
+window.permanentlyDeletePastor = async function(entryId) {
+  if (!confirm('Permanently delete this pastor from the Recycle Bin? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/recycle-bin/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to permanently delete pastor');
+    showToast('Pastor permanently deleted.', 'success');
+    await openRecycleBinModal();
+  } catch (err) { showToast('Permanent delete failed: ' + err.message, 'error'); }
+};
+
 // --- Live Presentation Slides Mode ---
 async function openPresentationMode() {
   if (state.allMode) {
@@ -967,7 +1109,7 @@ function buildPresentationSlides() {
       subtitle: q.quarterName,
       months: q.months
     });
-    const entries = q.entries || [];
+    const entries = filterEntriesForDisplay(q, q.entries || []);
     for (let i = 0; i < entries.length; i += chunkSize) {
       slides.push({
         isCover: false,

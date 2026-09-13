@@ -41,6 +41,7 @@
             <a href="#" id="action-backup-json"><i class="fa-solid fa-database"></i> Export Backup (.json)</a>
             <a href="#" id="action-add-quarter"><i class="fa-solid fa-calendar-plus"></i> Add New Quarter</a>
             <a href="#" id="action-audit-trail"><i class="fa-solid fa-clock-rotate-left"></i> Audit Trail</a>
+            <a href="#" id="action-recycle-bin"><i class="fa-solid fa-trash-can-arrow-up"></i> Recycle Bin</a>
             <div class="divider"></div>
             <a href="#" id="action-reset-data" class="text-danger"><i class="fa-solid fa-rotate-left"></i> Reset to Original PPT Data</a>
           </div>
@@ -66,6 +67,27 @@
         <div class="control-group">
           <label><i class="fa-solid fa-filter"></i> Filter by Year</label>
           <div class="year-pills" id="year-pills"></div>
+        </div>
+
+        <!-- Pastor Type Filter -->
+        <div class="control-group compact-filter-group">
+          <label for="pastor-type-filter"><i class="fa-solid fa-globe"></i> Pastor Type</label>
+          <select id="pastor-type-filter" class="form-select">
+            <option value="All">All</option>
+            <option value="Local">Local</option>
+            <option value="Foreign">Foreign</option>
+            <option value="Unassigned">Unassigned</option>
+          </select>
+        </div>
+
+        <!-- Status Filter -->
+        <div class="control-group compact-filter-group">
+          <label for="status-filter"><i class="fa-solid fa-filter-circle-check"></i> Status</label>
+          <select id="status-filter" class="form-select">
+            <option value="All">All</option>
+            <option value="Incomplete Only">Incomplete Only</option>
+            <option value="Completed Only">Completed Only</option>
+          </select>
         </div>
 
         <!-- Search Box -->
@@ -152,6 +174,12 @@
               <i class="fa-solid fa-eraser"></i> Clear All
             </button>
           </div>
+          <button id="btn-report" class="btn btn-secondary btn-sm">
+            <i class="fa-solid fa-file-lines"></i> Mission Report
+          </button>
+          <button id="btn-exit-report" class="btn btn-outline btn-sm" style="display:none;">
+            <i class="fa-solid fa-xmark"></i> Exit Report
+          </button>
           <button id="btn-add-pastor" class="btn btn-primary btn-sm">
             <i class="fa-solid fa-user-plus"></i> Add Pastor
           </button>
@@ -249,6 +277,14 @@
             <input type="text" id="pastor-name" class="form-input" placeholder="e.g. Arana, Aldrich" required>
           </div>
           <div class="form-group">
+            <label for="pastor-type">Pastor Type</label>
+            <select id="pastor-type" class="form-select">
+              <option value="Unassigned">Unassigned</option>
+              <option value="Local">Local</option>
+              <option value="Foreign">Foreign</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label for="pastor-notes">Notes / Remarks</label>
             <input type="text" id="pastor-notes" class="form-input" placeholder="Optional notes (e.g. Church assignment, special support)">
           </div>
@@ -304,6 +340,72 @@
             <button type="submit" class="btn btn-primary">Create Quarter</button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mission Report Builder Modal -->
+  <div class="modal" id="report-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content report-modal-content">
+      <div class="modal-header">
+        <div>
+          <h3>Mission Report Builder</h3>
+          <p class="modal-subtitle">Select the quarters and filters to show on the web report and downloaded PowerPoint.</p>
+        </div>
+        <button class="modal-close" id="modal-report-close">&times;</button>
+      </div>
+      <div class="modal-body report-builder-body">
+        <div class="report-filter-row">
+          <div class="form-group">
+            <label for="report-pastor-type">Pastor Type</label>
+            <select id="report-pastor-type" class="form-select">
+              <option value="All">All</option>
+              <option value="Local">Local</option>
+              <option value="Foreign">Foreign</option>
+              <option value="Unassigned">Unassigned</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="report-status-filter">Status</label>
+            <select id="report-status-filter" class="form-select">
+              <option value="All">All</option>
+              <option value="Incomplete Only">Incomplete Only</option>
+              <option value="Completed Only">Completed Only</option>
+            </select>
+          </div>
+        </div>
+        <div class="report-selection-toolbar">
+          <strong>Select Quarters</strong>
+          <div>
+            <button type="button" class="btn btn-sm btn-outline" id="report-select-all">Select All</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="report-clear-all">Clear All</button>
+          </div>
+        </div>
+        <div class="report-quarter-list" id="report-quarter-list"></div>
+        <div class="report-current-note"><i class="fa-solid fa-circle-info"></i> If the latest/current quarter is included, it will show <strong>all pastors</strong> even when “Incomplete Only” is selected.</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" id="btn-report-cancel">Cancel</button>
+          <button type="button" class="btn btn-secondary" id="btn-report-view"><i class="fa-solid fa-eye"></i> View Report</button>
+          <button type="button" class="btn btn-primary" id="btn-report-download"><i class="fa-solid fa-file-powerpoint"></i> Download PPTX</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recycle Bin Modal -->
+  <div class="modal" id="recycle-bin-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content recycle-modal-content">
+      <div class="modal-header">
+        <div>
+          <h3>Recycle Bin</h3>
+          <p class="modal-subtitle">Deleted pastors stay here until you restore or permanently delete them.</p>
+        </div>
+        <button class="modal-close" id="modal-recycle-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="recycle-list" id="recycle-list"><div class="audit-empty">Loading deleted records...</div></div>
       </div>
     </div>
   </div>

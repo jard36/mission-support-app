@@ -23,3 +23,12 @@ Usa ka moderno ug sayon gamiton nga CRUD Web Application para sa pagdumala sa Mi
  \\\
 - Ablihi ang browser sa: [http://localhost:3000](http://localhost:3000)
 
+
+## Latest updates
+
+- Dynamic A/B/C/D/E support totals: each letter is one support slot per month. For example, A+B across three months is 6/6; A+B+C is 9/9; A+B+C+D is 12/12; A+B+C+D+E is 15/15.
+- New Local / Foreign / Unassigned pastor classification and filters. The selected type is also applied to PPT exports and presentations.
+- Mission Report Builder: select multiple quarters, choose pastor type and status, view the selected report in the browser, or download one combined PPTX.
+- Incomplete-only reporting filters completed pastors from older/completed quarters. The latest/current quarter is always shown in full so the report can show both complete and incomplete pastors.
+- The All year filter is functional and displays every available quarter; the same selection can be presented or downloaded.
+- Deleted pastors now go to a Recycle Bin. Restore returns the full record and support history to its original quarter/order; permanent deletion requires confirmation.

@@ -289,7 +289,7 @@ body {
 
 .controls-grid {
   display: grid;
-  grid-template-columns: 300px auto 1fr;
+  grid-template-columns: 300px minmax(240px, 1fr) 150px 150px minmax(260px, 1.2fr);
   align-items: flex-end;
   gap: 1.5rem;
 }
@@ -1413,3 +1413,65 @@ body {
 .all-quarter-table td, .all-quarter-table th { white-space:nowrap; }
 .all-status-cell { text-align:center; color:var(--emerald); font-weight:800; }
 .all-empty { padding:2rem; text-align:center; color:var(--text-muted); }
+
+/* Pastor type / reporting filters */
+.compact-filter-group { min-width: 150px; }
+.pastor-type-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: .15rem .42rem;
+  border-radius: 999px;
+  font-size: .58rem;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  background: var(--bg-input);
+}
+.pastor-type-badge.type-local { color: #A7F3D0; border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.10); }
+.pastor-type-badge.type-foreign { color: #DDD6FE; border-color: rgba(139,92,246,.38); background: rgba(139,92,246,.12); }
+.pastor-type-badge.type-unassigned { color: var(--text-subtle); }
+.pastor-name-cell { gap: .35rem; }
+
+/* Mission report builder */
+.report-modal-content { max-width: 760px; max-height: 90vh; display: flex; flex-direction: column; }
+.report-builder-body { overflow-y: auto; }
+.report-filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.report-filter-row .form-group { margin-bottom: .75rem; }
+.report-selection-toolbar { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.75rem 0; border-top:1px solid var(--border-color); border-bottom:1px solid var(--border-color); }
+.report-selection-toolbar > div { display:flex; gap:.45rem; }
+.report-quarter-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.55rem; padding: .85rem 0; max-height: 330px; overflow:auto; }
+.report-quarter-option { display:flex; align-items:center; gap:.7rem; padding:.7rem .8rem; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:rgba(20,13,33,.5); cursor:pointer; transition:var(--transition); }
+.report-quarter-option:hover { border-color:var(--accent-violet); background:var(--bg-card-hover); }
+.report-quarter-option input { width:17px; height:17px; accent-color: var(--accent-violet); flex-shrink:0; }
+.report-quarter-option span { display:flex; flex-direction:column; min-width:0; }
+.report-quarter-option strong { font-size:.78rem; color:var(--text-main); }
+.report-quarter-option small { color:var(--text-subtle); font-size:.66rem; margin-top:.15rem; }
+.report-current-note { padding:.65rem .8rem; border:1px solid rgba(139,92,246,.25); border-radius:var(--radius-sm); background:rgba(139,92,246,.08); color:var(--text-muted); font-size:.72rem; line-height:1.45; }
+.report-current-note i { color:var(--accent-soft); margin-right:.3rem; }
+
+/* Recycle Bin */
+.recycle-modal-content { max-width: 780px; max-height: 88vh; display:flex; flex-direction:column; }
+.recycle-list { display:flex; flex-direction:column; gap:.6rem; max-height:65vh; overflow:auto; }
+.recycle-item { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.8rem .9rem; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:rgba(20,13,33,.55); }
+.recycle-main { display:flex; flex-direction:column; min-width:0; gap:.15rem; }
+.recycle-main strong { color:var(--text-main); font-size:.82rem; }
+.recycle-main span { color:var(--text-muted); font-size:.7rem; }
+.recycle-main small { color:var(--text-subtle); font-size:.65rem; }
+.recycle-actions { display:flex; gap:.4rem; flex-shrink:0; }
+.btn-danger { background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.35); color:#FCA5A5; }
+.btn-danger:hover { background:rgba(239,68,68,.2); color:#FECACA; }
+
+@media (max-width: 1050px) {
+  .controls-grid { grid-template-columns: 1.2fr 1fr 1fr; }
+  .search-group { grid-column: 1 / -1; }
+}
+@media (max-width: 700px) {
+  .report-filter-row, .report-quarter-list { grid-template-columns: 1fr; }
+  .report-selection-toolbar { align-items:flex-start; flex-direction:column; }
+  .recycle-item { align-items:flex-start; flex-direction:column; }
+  .recycle-actions { width:100%; }
+  .recycle-actions .btn { flex:1; }
+}

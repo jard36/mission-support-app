@@ -38,10 +38,76 @@ function addAudit(db, req, action, details = {}) {
   if (auditTrail.length > 2000) auditTrail.length = 2000;
 }
 
+function ensureRecycleBin(db) {
+  if (!Array.isArray(db.recycleBin)) db.recycleBin = [];
+  return db.recycleBin;
+}
+
+function normalizePastorType(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'local') return 'Local';
+  if (v === 'foreign') return 'Foreign';
+  return 'Unassigned';
+}
+
+function normalizeEntry(entry) {
+  entry.pastorType = normalizePastorType(entry.pastorType);
+  return entry;
+}
+
+function normalizeDB(db) {
+  if (!Array.isArray(db.quarters)) db.quarters = [];
+  db.quarters.forEach(q => {
+    if (!Array.isArray(q.entries)) q.entries = [];
+    q.entries.forEach(normalizeEntry);
+  });
+  ensureRecycleBin(db);
+  ensureAuditTrail(db);
+  return db;
+}
+
+function statusMetrics(value) {
+  const text = String(value || '').trim();
+  if (!text) return { checked: 0, total: 1 };
+  const matches = [...text.matchAll(/([A-E])\s*\./gi)];
+  if (matches.length) {
+    let checkedLetters = 0;
+    matches.forEach((m, i) => {
+      const start = m.index + m[0].length;
+      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+      if (/✓/.test(text.slice(start, end))) checkedLetters++;
+    });
+    return { checked: checkedLetters, total: matches.length };
+  }
+  return { checked: text.includes('✓') ? 1 : 0, total: 1 };
+}
+
+function entryMetrics(entry) {
+  const months = [entry.m1, entry.m2, entry.m3].map(statusMetrics);
+  return {
+    checked: months.reduce((sum, m) => sum + m.checked, 0),
+    total: months.reduce((sum, m) => sum + m.total, 0)
+  };
+}
+
+function isEntryComplete(entry) {
+  const m = entryMetrics(entry);
+  return m.total > 0 && m.checked === m.total;
+}
+
+function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', currentLatest = false } = {}) {
+  let entries = (q.entries || []).map(normalizeEntry);
+  if (pastorType && pastorType !== 'All') entries = entries.filter(e => e.pastorType === pastorType);
+  if (statusFilter && statusFilter !== 'All' && !currentLatest) {
+    entries = entries.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
+  }
+  return entries;
+}
+
 // 1. GET all quarters summary
 app.get('/api/quarters', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const summary = db.quarters.map(q => {
       const total = q.entries.length;
       const countM1 = q.entries.filter(e => e.m1 && e.m1.includes('✓')).length;
@@ -75,7 +141,7 @@ app.get('/api/quarters', async (req, res) => {
 // 2. GET specific quarter details
 app.get('/api/quarters/:id', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const q = db.quarters.find(x => x.id === req.params.id);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
     res.json(q);
@@ -94,7 +160,7 @@ app.post('/api/quarters', async (req, res) => {
     const yr = parseInt(year);
     const qKey = `${yr}-Q${qNum}`;
 
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     if (db.quarters.some(q => q.id === qKey)) {
       return res.status(400).json({ error: 'Quarter already exists: ' + qKey });
     }
@@ -121,7 +187,8 @@ app.post('/api/quarters', async (req, res) => {
           m1: '',
           m2: '',
           m3: '',
-          notes: ''
+          notes: '',
+          pastorType: normalizePastorType(e.pastorType)
         }));
       }
     }
@@ -150,7 +217,7 @@ app.post('/api/quarters', async (req, res) => {
 // 4. DELETE quarter
 app.delete('/api/quarters/:id', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const idx = db.quarters.findIndex(q => q.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Quarter not found' });
     const deleted = db.quarters.splice(idx, 1);
@@ -165,10 +232,10 @@ app.delete('/api/quarters/:id', async (req, res) => {
 // 5. POST new Pastor to quarter
 app.post('/api/quarters/:quarterId/entries', async (req, res) => {
   try {
-    const { name, number, m1, m2, m3, notes, addToAllQuarters } = req.body;
+    const { name, number, m1, m2, m3, notes, pastorType, addToAllQuarters } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Pastor name is required' });
 
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
@@ -185,6 +252,7 @@ app.post('/api/quarters/:quarterId/entries', async (req, res) => {
       m2: m2 || '',
       m3: m3 || '',
       notes: notes || '',
+      pastorType: normalizePastorType(pastorType),
       updatedAt: now
     };
 
@@ -205,6 +273,7 @@ app.post('/api/quarters/:quarterId/entries', async (req, res) => {
             m2: '',
             m3: '',
             notes: '',
+            pastorType: normalizePastorType(pastorType),
             updatedAt: now
           });
         }
@@ -221,15 +290,15 @@ app.post('/api/quarters/:quarterId/entries', async (req, res) => {
 // 6. PUT update Pastor entry
 app.put('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
   try {
-    const { name, number, m1, m2, m3, notes } = req.body;
-    const db = await readDB();
+    const { name, number, m1, m2, m3, notes, pastorType } = req.body;
+    const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
     const entry = quarter.entries.find(e => e.id === req.params.entryId);
     if (!entry) return res.status(404).json({ error: 'Pastor entry not found' });
 
-    const before = { name: entry.name, number: entry.number, m1: entry.m1 || '', m2: entry.m2 || '', m3: entry.m3 || '', notes: entry.notes || '' };
+    const before = { name: entry.name, number: entry.number, m1: entry.m1 || '', m2: entry.m2 || '', m3: entry.m3 || '', notes: entry.notes || '', pastorType: normalizePastorType(entry.pastorType) };
     const now = new Date().toISOString();
     if (name !== undefined) entry.name = name.trim();
     if (number !== undefined) entry.number = parseInt(number);
@@ -237,11 +306,12 @@ app.put('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
     if (m2 !== undefined) entry.m2 = m2;
     if (m3 !== undefined) entry.m3 = m3;
     if (notes !== undefined) entry.notes = notes;
+    if (pastorType !== undefined) entry.pastorType = normalizePastorType(pastorType);
     entry.updatedAt = now;
     entry.rawName = `${entry.number}. ${entry.name}`;
 
     const changes = [];
-    ['name','number','m1','m2','m3','notes'].forEach(key => {
+    ['name','number','m1','m2','m3','notes','pastorType'].forEach(key => {
       const after = entry[key] ?? '';
       if (String(before[key] ?? '') !== String(after)) {
         const monthName = key === 'm1' ? quarter.months?.[0] : key === 'm2' ? quarter.months?.[1] : key === 'm3' ? quarter.months?.[2] : null;
@@ -265,7 +335,7 @@ app.put('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
 // 7. DELETE Pastor entry
 app.delete('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
@@ -273,7 +343,9 @@ app.delete('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
     if (idx === -1) return res.status(404).json({ error: 'Pastor entry not found' });
 
     const removed = quarter.entries.splice(idx, 1);
-    addAudit(db, req, 'Pastor Deleted', { quarterId: quarter.id, entryId: removed[0].id, pastorName: removed[0].name, description: `${removed[0].name} was removed from ${quarter.id}` });
+    const deletedEntry = { ...normalizeEntry(removed[0]), deletedAt: new Date().toISOString(), deletedFromQuarterId: quarter.id, deletedFromQuarterTitle: quarter.title, deletedFromNumber: removed[0].number || (idx + 1) };
+    ensureRecycleBin(db).unshift(deletedEntry);
+    addAudit(db, req, 'Pastor Deleted', { quarterId: quarter.id, entryId: deletedEntry.id, pastorName: deletedEntry.name, description: `${deletedEntry.name} was moved to the Recycle Bin from ${quarter.id}` });
     // Renumber remaining pastors
     quarter.entries.forEach((e, i) => {
       e.number = i + 1;
@@ -281,7 +353,7 @@ app.delete('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
     });
 
     await writeDB(db);
-    res.json({ message: 'Pastor removed', removed: removed[0] });
+    res.json({ message: 'Pastor moved to Recycle Bin', removed: deletedEntry });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -291,7 +363,7 @@ app.delete('/api/quarters/:quarterId/entries/:entryId', async (req, res) => {
 app.post('/api/quarters/:quarterId/bulk', async (req, res) => {
   try {
     const { monthKey, action } = req.body; // monthKey: 'm1' | 'm2' | 'm3' | 'all', action: 'check' | 'uncheck'
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
@@ -322,7 +394,7 @@ app.post('/api/quarters/:quarterId/batch-save', async (req, res) => {
     const { updates } = req.body; // updates: [{ id, m1, m2, m3, notes }]
     if (!Array.isArray(updates)) return res.status(400).json({ error: 'Updates array is required' });
 
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
@@ -364,10 +436,65 @@ app.post('/api/quarters/:quarterId/batch-save', async (req, res) => {
   }
 });
 
-// 9. GET audit trail
+// 9. Recycle Bin
+app.get('/api/recycle-bin', async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    res.json({ recycleBin: db.recycleBin || [], lastUpdated: db.lastUpdated || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/recycle-bin/:entryId/restore', async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    const bin = ensureRecycleBin(db);
+    const idx = bin.findIndex(e => e.id === req.params.entryId);
+    if (idx === -1) return res.status(404).json({ error: 'Deleted pastor not found in Recycle Bin' });
+    const item = bin[idx];
+    const quarter = db.quarters.find(q => q.id === item.deletedFromQuarterId);
+    if (!quarter) return res.status(404).json({ error: 'Original quarter no longer exists' });
+    if (quarter.entries.some(e => e.id === item.id)) return res.status(400).json({ error: 'Pastor already exists in the original quarter' });
+    const restored = { ...item };
+    const originalNumber = Number(restored.deletedFromNumber) || (quarter.entries.length + 1);
+    delete restored.deletedAt;
+    delete restored.deletedFromQuarterId;
+    delete restored.deletedFromQuarterTitle;
+    delete restored.deletedFromNumber;
+    restored.pastorType = normalizePastorType(restored.pastorType);
+    const insertAt = Math.max(0, Math.min(originalNumber - 1, quarter.entries.length));
+    quarter.entries.splice(insertAt, 0, restored);
+    quarter.entries.forEach((e, i) => { e.number = i + 1; e.rawName = `${e.number}. ${e.name}`; });
+    restored.updatedAt = new Date().toISOString();
+    bin.splice(idx, 1);
+    addAudit(db, req, 'Pastor Restored', { quarterId: quarter.id, entryId: restored.id, pastorName: restored.name, description: `${restored.name} was restored to ${quarter.id}` });
+    await writeDB(db);
+    res.json({ message: 'Pastor restored successfully', restored, quarterId: quarter.id, lastUpdated: db.lastUpdated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/recycle-bin/:entryId', async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    const bin = ensureRecycleBin(db);
+    const idx = bin.findIndex(e => e.id === req.params.entryId);
+    if (idx === -1) return res.status(404).json({ error: 'Deleted pastor not found in Recycle Bin' });
+    const removed = bin.splice(idx, 1)[0];
+    addAudit(db, req, 'Pastor Permanently Deleted', { quarterId: removed.deletedFromQuarterId, entryId: removed.id, pastorName: removed.name, description: `${removed.name} was permanently deleted from the Recycle Bin` });
+    await writeDB(db);
+    res.json({ message: 'Pastor permanently deleted', removed, lastUpdated: db.lastUpdated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 10. GET audit trail
 app.get('/api/audit-trail', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     res.json({ auditTrail: db.auditTrail || [], lastUpdated: db.lastUpdated || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -377,7 +504,7 @@ app.get('/api/audit-trail', async (req, res) => {
 // 9. Reset DB to original backup
 app.post('/api/reset', async (req, res) => {
   try {
-    const db = await resetDB();
+    const db = normalizeDB(await resetDB());
     addAudit(db, req, 'Database Reset', { description: 'Database was reset to the original PowerPoint reference data' });
     await writeDB(db);
     res.json({ message: 'Database reset to original PowerPoint reference successfully', quartersCount: db.quarters.length });
@@ -389,7 +516,7 @@ app.post('/api/reset', async (req, res) => {
 // 10. Health/status endpoint
 app.get('/api/health', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     res.json({ ok: true, database: getDatabaseMode(), quarters: db.quarters?.length || 0, lastUpdated: db.lastUpdated || null });
   } catch (err) {
     res.status(500).json({ ok: false, database: getDatabaseMode(), error: err.message });
@@ -426,7 +553,16 @@ function pptStatusFontSize(value) {
   return 11;
 }
 
-async function buildPptx(quarterList) {
+function filtersForQuarter(q, filters = {}) {
+  const latestId = filters.latestQuarterId || null;
+  return {
+    pastorType: filters.pastorType || 'All',
+    statusFilter: filters.statusFilter || 'All',
+    currentLatest: Boolean(latestId && q.id === latestId)
+  };
+}
+
+async function buildPptx(quarterList, filters = {}) {
   const pptx = new pptxgen();
   // Explicit 16:9 PowerPoint canvas: 13.333 x 7.5 inches.
   pptx.defineLayout({ name: 'MISSION_16X9', width: 13.333, height: 7.5 });
@@ -466,7 +602,7 @@ async function buildPptx(quarterList) {
       breakLine: false, fit: 'shrink', margin: 0.02
     });
 
-    const entries = q.entries || [];
+    const entries = filterQuarterEntries(q, filtersForQuarter(q, filters));
     const months = q.months || ['Month 1', 'Month 2', 'Month 3'];
     const chunkSize = 3;
 
@@ -524,11 +660,12 @@ async function buildPptx(quarterList) {
 // 11. Download PPTX endpoint for single quarter
 app.get('/api/export/pptx/:quarterId', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     const q = db.quarters.find(x => x.id === req.params.quarterId);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
 
-    const pptx = await buildPptx([q]);
+    const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
+    const pptx = await buildPptx([q], { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
     const buffer = await pptx.write({ outputType: 'nodebuffer' });
     const filename = `Mission_Support_${q.id}.pptx`;
 
@@ -541,11 +678,35 @@ app.get('/api/export/pptx/:quarterId', async (req, res) => {
   }
 });
 
-// 12. Download PPTX endpoint for all quarters
+// 12. Download a filtered multi-quarter mission report
+app.get('/api/export/pptx-report', async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    const ids = String(req.query.quarterIds || '').split(',').map(s => s.trim()).filter(Boolean);
+    const quarterList = ids.length ? db.quarters.filter(q => ids.includes(q.id)) : db.quarters;
+    if (!quarterList.length) return res.status(400).json({ error: 'No quarters selected for the report' });
+    const pastorType = req.query.pastorType || 'All';
+    const statusFilter = req.query.statusFilter || 'All';
+    const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
+    const pptx = await buildPptx(quarterList, { pastorType, statusFilter, latestQuarterId: latestId });
+    const buffer = await pptx.write({ outputType: 'nodebuffer' });
+    const label = ids.length === 1 ? ids[0] : `${quarterList[0].year}-${quarterList[quarterList.length - 1].year}`;
+    const filename = `Mission_Support_Report_${label}.pptx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error('Report export error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 13. Download PPTX endpoint for all quarters
 app.get('/api/export/pptx-all', async (req, res) => {
   try {
-    const db = await readDB();
-    const pptx = await buildPptx(db.quarters);
+    const db = normalizeDB(await readDB());
+    const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
+    const pptx = await buildPptx(db.quarters, { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
     const buffer = await pptx.write({ outputType: 'nodebuffer' });
     const filename = 'Mission_Support_All_Quarters.pptx';
 
@@ -561,7 +722,7 @@ app.get('/api/export/pptx-all', async (req, res) => {
 // 13. Download JSON backup
 app.get('/api/backup', async (req, res) => {
   try {
-    const db = await readDB();
+    const db = normalizeDB(await readDB());
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename="mission_support_backup.json"');
     res.send(JSON.stringify(db, null, 2));
