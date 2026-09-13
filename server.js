@@ -628,7 +628,7 @@ async function buildPptx(quarterList, filters = {}) {
         const nameLabel = `${p.number ? p.number + '. ' : ''}${p.name}`;
         const vals = [p.m1, p.m2, p.m3];
         tableData.push([
-          { text: nameLabel, options: { fontSize: 20, color: 'FFFFFF', fill: { color: rowBg }, bold: true, align: 'left', valign: 'middle', fit: 'shrink', margin: 0.08 } },
+          { text: nameLabel, options: { fontSize: 36, color: 'FFFFFF', fill: { color: rowBg }, bold: true, align: 'left', valign: 'middle', fit: 'shrink', margin: 0.08 } },
           ...vals.map(v => {
             const text = pptStatusDisplay(v);
             return { text, options: { fontSize: pptStatusFontSize(v), color: text ? '34D399' : 'FFFFFF', align: 'center', valign: 'middle', fill: { color: rowBg }, bold: true, fit: 'shrink', margin: 0.03 } };
