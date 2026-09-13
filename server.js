@@ -61,6 +61,8 @@ function sanitizeUser(user) {
     status: user.status,
     email: user.email || '',
     phone: user.phone || '',
+    assignedPastors: Array.isArray(user.assignedPastors) ? user.assignedPastors : (user.assignedPastor ? [user.assignedPastor] : []),
+    assignedPastor: user.assignedPastor || (Array.isArray(user.assignedPastors) && user.assignedPastors[0]) || null,
     createdAt: user.createdAt
   };
 }
@@ -148,11 +150,15 @@ function normalizePastorKey(name, number) {
 
 function getSupporterEntryFilter(user) {
   if (user?.role !== 'supporter') return () => true;
-  const assigned = user.assignedPastor || {};
-  if (!assigned.name) return () => false;
-  const key = normalizePastorKey(assigned.name, assigned.number);
-  return (entry) => normalizePastorKey(entry.name, entry.number) === key ||
-    (String(entry.name || '').trim().toLowerCase() === String(assigned.name).trim().toLowerCase() && (!assigned.number || String(entry.number || '') === String(assigned.number)));
+  const assignedList = Array.isArray(user.assignedPastors) ? user.assignedPastors : (user.assignedPastor ? [user.assignedPastor] : []);
+  if (!assignedList.length) return () => false;
+  const keys = assignedList.map(assigned => ({
+    key: normalizePastorKey(assigned.name, assigned.number),
+    name: String(assigned.name || '').trim().toLowerCase(),
+    number: String(assigned.number || '').trim()
+  }));
+  return (entry) => keys.some(assigned => normalizePastorKey(entry.name, entry.number) === assigned.key ||
+    (String(entry.name || '').trim().toLowerCase() === assigned.name && (!assigned.number || String(entry.number || '') === assigned.number)));
 }
 
 function filterQuarterForUser(q, user) {
@@ -311,12 +317,18 @@ app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, re
     const db = ensureAuthState(await readDB());
     const user = db.users.find(u => u.id === req.params.id && u.role === 'supporter');
     if (!user) return res.status(404).json({ error:'Supporter not found.' });
-    const name = String(req.body?.name || '').trim();
-    const number = String(req.body?.number ?? '').trim();
-    if (!name) return res.status(400).json({ error:'Pastor name is required.' });
-    user.assignedPastor = { name, number };
+
+    let pastors = Array.isArray(req.body?.pastors) ? req.body.pastors : [];
+    if (!pastors.length && req.body?.name) pastors = [{ name:req.body.name, number:req.body.number }];
+    pastors = pastors.map(p => ({ name:String(p?.name || '').trim(), number:String(p?.number ?? '').trim() }))
+      .filter(p => p.name)
+      .filter((p, i, arr) => arr.findIndex(x => normalizePastorKey(x.name, x.number) === normalizePastorKey(p.name, p.number)) === i);
+    if (!pastors.length) return res.status(400).json({ error:'Select at least one pastor.' });
+
+    user.assignedPastors = pastors;
+    user.assignedPastor = pastors[0];
     user.status = 'active';
-    addAudit(db, req, 'SUPPORTER_ASSIGNED', { userId:user.id, username:user.username, pastor:name, pastorNumber:number });
+    addAudit(db, req, 'SUPPORTER_ASSIGNED', { userId:user.id, username:user.username, pastors });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -327,7 +339,7 @@ app.post('/api/auth/users/:id/unassign', requireAuth, requireStaff, async (req, 
     const db = ensureAuthState(await readDB());
     const user = db.users.find(u => u.id === req.params.id && u.role === 'supporter');
     if (!user) return res.status(404).json({ error:'Supporter not found.' });
-    user.assignedPastor = null; user.status = 'pending_assignment';
+    user.assignedPastors = []; user.assignedPastor = null; user.status = 'pending_assignment';
     addAudit(db, req, 'SUPPORTER_UNASSIGNED', { userId:user.id, username:user.username });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });

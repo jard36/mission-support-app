@@ -456,33 +456,79 @@ async function loadUsers(){
   try{const res=await fetch('/api/auth/users');const data=await res.json();if(!res.ok)throw new Error(data.error||'Unable to load users');managedUsers=data.users||[];renderUserManagement();}
   catch(err){showToast(err.message,'error');}
 }
+function getUserAssignedPastors(user){
+  if(Array.isArray(user?.assignedPastors)) return user.assignedPastors;
+  return user?.assignedPastor ? [user.assignedPastor] : [];
+}
+function formatAssignedPastors(user){
+  const list=getUserAssignedPastors(user);
+  if(!list.length) return 'No pastor assigned';
+  if(list.length===1) return `Assigned: ${escapeHtml(list[0].name)}`;
+  return `Assigned (${list.length}): ${list.map(p=>escapeHtml(p.name)).join(', ')}`;
+}
 function renderUserManagement(){
   const list=document.getElementById('user-management-list'); if(!list)return;
   const q=(document.getElementById('user-search')?.value||'').toLowerCase().trim();
-  const users=managedUsers.filter(u=>!q||[u.name,u.username,u.email,u.phone,u.role,u.status,u.assignedPastor?.name].join(' ').toLowerCase().includes(q));
+  const users=managedUsers.filter(u=>!q||[u.name,u.username,u.email,u.phone,u.role,u.status,...getUserAssignedPastors(u).map(p=>p.name)].join(' ').toLowerCase().includes(q));
   if(!users.length){list.innerHTML='<div class="audit-empty">No users found.</div>';return;}
   list.innerHTML=users.map(u=>{
-    const assignment=u.assignedPastor?.name ? `Assigned: ${escapeHtml(u.assignedPastor.name)}` : 'No pastor assigned';
+    const assigned=getUserAssignedPastors(u);
+    const assignment=formatAssignedPastors(u);
     const canDelete=currentUser?.role==='admin' && u.role!=='admin';
-    return `<div class="user-row"><div class="user-row-main"><strong>${escapeHtml(u.name||u.username)}</strong><small>@${escapeHtml(u.username)}</small></div><div class="user-meta">${escapeHtml(u.email||'No email')}<br>${escapeHtml(u.phone||'No phone')}</div><div class="user-meta"><b>${escapeHtml(String(u.role).toUpperCase())}</b><br><span class="user-status ${escapeHtml(u.status)}">${escapeHtml(u.status.replace('_',' '))}</span><br>${assignment}</div><div class="user-actions">${u.role==='supporter' ? `<button class="btn btn-sm btn-primary" onclick="assignSupporter('${u.id}')">${u.assignedPastor?'Change Pastor':'Assign Pastor'}</button>${u.assignedPastor?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign</button>`:''}`:''}<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')">Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')">Reset Password</button>${canDelete?`<button class="btn btn-sm btn-outline text-danger" onclick="deleteManagedUser('${u.id}')">Delete</button>`:''}</div></div>`;
+    return `<div class="user-row"><div class="user-row-main"><strong>${escapeHtml(u.name||u.username)}</strong><small>@${escapeHtml(u.username)}</small></div><div class="user-meta">${escapeHtml(u.email||'No email')}<br>${escapeHtml(u.phone||'No phone')}</div><div class="user-meta"><b>${escapeHtml(String(u.role).toUpperCase())}</b><br><span class="user-status ${escapeHtml(u.status)}">${escapeHtml(u.status.replace('_',' '))}</span><br>${assignment}</div><div class="user-actions">${u.role==='supporter' ? `<button class="btn btn-sm btn-primary" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}`:''}<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')">Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')">Reset Password</button>${canDelete?`<button class="btn btn-sm btn-outline text-danger" onclick="deleteManagedUser('${u.id}')">Delete</button>`:''}</div></div>`;
   }).join('');
 }
 async function getPastorChoices(){
   const res=await fetch('/api/quarters'); const data=await res.json(); if(!res.ok)throw new Error(data.error||'Unable to load pastors');
   const latest=data.quarters?.[data.quarters.length-1]; if(!latest) return [];
   const qr=await fetch(`/api/quarters/${latest.id}`); const q=await qr.json(); if(!qr.ok)throw new Error(q.error||'Unable to load pastors');
-  return q.entries||[];
+  const seen=new Set();
+  return (q.entries||[]).filter(p=>{const key=`${p.number||''}::${String(p.name||'').toLowerCase()}`;if(seen.has(key))return false;seen.add(key);return true;});
 }
+function ensureAssignmentModal(){
+  let modal=document.getElementById('assign-pastor-modal');
+  if(modal) return modal;
+  modal=document.createElement('div');
+  modal.className='modal'; modal.id='assign-pastor-modal';
+  modal.innerHTML=`<div class="modal-backdrop"></div><div class="modal-content assignment-modal-content"><div class="modal-header"><div><h3>Edit Pastor Assignment</h3><p class="modal-subtitle" id="assign-pastor-subtitle">Select one or more pastors.</p></div><button class="modal-close" id="assign-pastor-close">&times;</button></div><div class="modal-body"><div class="assignment-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input id="assign-pastor-search" class="form-input" placeholder="Search pastor by name or number..."></div><div class="assignment-toolbar"><span id="assign-pastor-count">0 selected</span><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-select-all">Select All</button><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-clear">Clear</button></div><div id="assign-pastor-options" class="assignment-options"></div><div class="form-actions"><button type="button" class="btn btn-outline" id="assign-pastor-cancel">Cancel</button><button type="button" class="btn btn-primary" id="assign-pastor-save"><i class="fa-solid fa-check"></i> Save Assignment</button></div></div></div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('#assign-pastor-close').onclick=closeAssignmentModal;
+  modal.querySelector('#assign-pastor-cancel').onclick=closeAssignmentModal;
+  modal.querySelector('.modal-backdrop').onclick=closeAssignmentModal;
+  modal.querySelector('#assign-pastor-search').addEventListener('input',renderAssignmentOptions);
+  modal.querySelector('#assign-pastor-select-all').onclick=()=>{assignmentSelected=new Set(assignmentPastors.map(p=>assignmentKey(p)));renderAssignmentOptions();};
+  modal.querySelector('#assign-pastor-clear').onclick=()=>{assignmentSelected.clear();renderAssignmentOptions();};
+  modal.querySelector('#assign-pastor-save').onclick=saveAssignment;
+  return modal;
+}
+let assignmentPastors=[];
+let assignmentSelected=new Set();
+let assignmentUserId=null;
+function assignmentKey(p){return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}`;}
+function renderAssignmentOptions(){
+  const modal=ensureAssignmentModal();
+  const q=(modal.querySelector('#assign-pastor-search').value||'').trim().toLowerCase();
+  const options=assignmentPastors.filter(p=>`${p.number||''} ${p.name||''}`.toLowerCase().includes(q));
+  modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} selected`;
+  modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{const key=assignmentKey(p);return `<label class="assignment-option"><input type="checkbox" value="${escapeHtml(key)}" ${assignmentSelected.has(key)?'checked':''}><span class="assignment-option-number">${escapeHtml(String(p.number||''))}</span><span>${escapeHtml(p.name||'')}</span></label>`;}).join(''):'<div class="audit-empty">No pastors found.</div>';
+  modal.querySelectorAll('#assign-pastor-options input').forEach(input=>input.addEventListener('change',()=>{if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} selected`;}));
+}
+function closeAssignmentModal(){document.getElementById('assign-pastor-modal')?.classList.remove('show');}
 async function assignSupporter(id){
   try{
-    const user=managedUsers.find(x=>x.id===id); const pastors=await getPastorChoices();
-    if(!pastors.length)return showToast('No pastors available to assign.','error');
-    const menu=pastors.map((p,i)=>`${i+1}. ${p.number ? p.number+'. ' : ''}${p.name}`).join('\n');
-    const raw=prompt(`Select the pastor for ${user?.name||'this supporter'} by number:\n\n${menu}`); if(!raw)return;
-    const idx=parseInt(raw,10)-1; if(!Number.isInteger(idx)||!pastors[idx])return showToast('Invalid pastor selection.','error');
-    const p=pastors[idx]; const res=await fetch(`/api/auth/users/${id}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.name,number:p.number})});
-    const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed'); showToast('Supporter assigned successfully.','success'); await loadUsers();
+    const user=managedUsers.find(x=>x.id===id); assignmentUserId=id; assignmentPastors=await getPastorChoices();
+    if(!assignmentPastors.length)return showToast('No pastors available to assign.','error');
+    const existing=getUserAssignedPastors(user); assignmentSelected=new Set(existing.map(assignmentKey));
+    const modal=ensureAssignmentModal(); modal.querySelector('#assign-pastor-subtitle').textContent=`Assign one or more pastors to ${user?.name||'this supporter'}.`;
+    modal.querySelector('#assign-pastor-search').value=''; renderAssignmentOptions(); modal.classList.add('show');
   }catch(err){showToast(err.message,'error');}
+}
+async function saveAssignment(){
+  const btn=document.getElementById('assign-pastor-save');
+  if(!assignmentUserId)return;
+  if(!assignmentSelected.size)return showToast('Select at least one pastor.','error');
+  const pastors=assignmentPastors.filter(p=>assignmentSelected.has(assignmentKey(p))).map(p=>({name:p.name,number:p.number}));
+  try{btn.disabled=true;const res=await fetch(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
 }
 async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await fetch(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
 async function editManagedUser(id){

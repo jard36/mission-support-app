@@ -1542,3 +1542,17 @@ body.auth-locked > *:not(#login-screen) { visibility: hidden; }
 .pending-card p { color:var(--text-muted); margin-bottom:18px; }
 .pending-status { display:inline-block; padding:7px 14px; border-radius:999px; background:var(--amber-bg); color:#FCD34D; font-weight:800; font-size:.8rem; margin-bottom:18px; }
 @media (max-width:800px) { .user-row { grid-template-columns:1fr; } .user-actions { justify-content:flex-start; } .user-management-toolbar { flex-direction:column; } }
+
+/* Multi-pastor supporter assignment */
+.assignment-modal-content { max-width: 680px; }
+.assignment-search-wrap { position: relative; margin-bottom: 12px; }
+.assignment-search-wrap > i { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); opacity: .6; z-index: 1; }
+.assignment-search-wrap .form-input { padding-left: 38px; width: 100%; }
+.assignment-toolbar { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.assignment-toolbar span { margin-right:auto; font-size:.9rem; font-weight:600; opacity:.8; }
+.assignment-options { max-height: 360px; overflow-y:auto; border:1px solid rgba(255,255,255,.10); border-radius:10px; padding:6px; }
+.assignment-option { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; cursor:pointer; }
+.assignment-option:hover { background:rgba(255,255,255,.06); }
+.assignment-option input { width:17px; height:17px; flex:0 0 auto; }
+.assignment-option-number { min-width:30px; font-weight:700; opacity:.7; }
+.assignment-modal-content .form-actions { margin-top:14px; display:flex; justify-content:flex-end; gap:8px; }
