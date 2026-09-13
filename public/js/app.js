@@ -527,6 +527,24 @@ function renderTable() {
   pastorsTbody.innerHTML = html;
 }
 
+function statusMetrics(value) {
+  const text = String(value || '').trim();
+  if (!text) return { checked: 0, total: 1 };
+
+  const matches = [...text.matchAll(/([A-E])\s*\./gi)];
+  if (matches.length) {
+    let checkedLetters = 0;
+    matches.forEach((m, i) => {
+      const start = m.index + m[0].length;
+      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+      if (/✓/.test(text.slice(start, end))) checkedLetters++;
+    });
+    return { checked: checkedLetters, total: matches.length };
+  }
+
+  return { checked: text.includes('✓') ? 1 : 0, total: 1 };
+}
+
 function getEffectiveStatus(entry, monthKey) {
   const key = `${entry.id}:${monthKey}`;
   if (Object.prototype.hasOwnProperty.call(state.pendingChanges, key)) {
