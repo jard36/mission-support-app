@@ -1479,6 +1479,8 @@ body {
 /* ==========================================================================\n   AUTHENTICATION\n   ========================================================================== */
 body.auth-locked { overflow: hidden; }
 body.auth-locked > *:not(#login-screen) { visibility: hidden; }
+/* Public supporter signup must remain accessible before login. */
+body.auth-locked > #signup-modal { visibility: visible; }
 .login-screen {
   position: fixed;
   inset: 0;
