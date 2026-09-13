@@ -164,6 +164,8 @@ function applyRoleUi() {
   document.body.classList.toggle('supporter-mode', supporter);
   const management = document.getElementById('action-user-management');
   if (management) management.style.display = staff ? '' : 'none';
+  const createUserBtn = document.getElementById('btn-create-user');
+  if (createUserBtn) createUserBtn.style.display = currentUser?.role === 'admin' ? '' : 'none';
   ['action-add-quarter','action-audit-trail','action-recycle-bin','action-backup-json','action-reset-data'].forEach(id => {
     const el = document.getElementById(id); if (el) el.style.display = staff ? '' : 'none';
   });
@@ -418,9 +420,9 @@ function openSignupModal(adminCreate = false) {
   const title = signupModal.querySelector('h3');
   const subtitle = signupModal.querySelector('.modal-subtitle');
   const roleGroup = document.getElementById('signup-role-group');
-  if (adminCreate && !['admin','staff'].includes(currentUser?.role)) return;
+  if (adminCreate && currentUser?.role !== 'admin') return;
   if (title) title.textContent = adminCreate ? 'Create User Account' : 'Create Supporter Account';
-  if (subtitle) subtitle.textContent = adminCreate ? 'Admin/Staff can create accounts. Supporters remain pending until assigned.' : 'Your account will remain pending until Admin/Staff confirms which pastor you support.';
+  if (subtitle) subtitle.textContent = adminCreate ? 'Only Admin can create accounts. Supporters remain pending until assigned.' : 'Your account will remain pending until Admin/Staff confirms which pastor you support.';
   if (roleGroup) roleGroup.style.display = adminCreate ? '' : 'none';
   if (form) form.dataset.adminCreate = adminCreate ? '1' : '0';
   signupModal.classList.add('show');
@@ -474,8 +476,11 @@ function renderUserManagement(){
   list.innerHTML=users.map(u=>{
     const assigned=getUserAssignedPastors(u);
     const assignment=formatAssignedPastors(u);
-    const canDelete=currentUser?.role==='admin' && u.role!=='admin';
-    return `<div class="user-row"><div class="user-row-main"><strong>${escapeHtml(u.name||u.username)}</strong><small>@${escapeHtml(u.username)}</small></div><div class="user-meta">${escapeHtml(u.email||'No email')}<br>${escapeHtml(u.phone||'No phone')}</div><div class="user-meta"><b>${escapeHtml(String(u.role).toUpperCase())}</b><br><span class="user-status ${escapeHtml(u.status)}">${escapeHtml(u.status.replace('_',' '))}</span><br>${assignment}</div><div class="user-actions">${u.role==='supporter' ? `<button class="btn btn-sm btn-primary" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}`:''}<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')">Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')">Reset Password</button>${canDelete?`<button class="btn btn-sm btn-outline text-danger" onclick="deleteManagedUser('${u.id}')">Delete</button>`:''}</div></div>`;
+    const isAdmin=currentUser?.role==='admin';
+    const canDelete=isAdmin && u.role!=='admin';
+    const assignmentActions=u.role==='supporter' ? `<button class="btn btn-sm btn-primary" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}` : '';
+    const adminActions=isAdmin ? `<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')">Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')">Reset Password</button>${canDelete?`<button class="btn btn-sm btn-outline text-danger" onclick="deleteManagedUser('${u.id}')">Delete</button>`:''}` : '';
+    return `<div class="user-row"><div class="user-row-main"><strong>${escapeHtml(u.name||u.username)}</strong><small>@${escapeHtml(u.username)}</small></div><div class="user-meta">${escapeHtml(u.email||'No email')}<br>${escapeHtml(u.phone||'No phone')}</div><div class="user-meta"><b>${escapeHtml(String(u.role).toUpperCase())}</b><br><span class="user-status ${escapeHtml(u.status)}">${escapeHtml(u.status.replace('_',' '))}</span><br>${assignment}</div><div class="user-actions">${assignmentActions}${adminActions}</div></div>`;
   }).join('');
 }
 async function getPastorChoices(){

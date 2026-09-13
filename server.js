@@ -268,7 +268,7 @@ app.get('/api/auth/users', requireAuth, requireStaff, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/auth/users', requireAuth, requireStaff, async (req, res) => {
+app.post('/api/auth/users', requireAuth, requireAdmin, async (req, res) => {
   try {
     const db = ensureAuthState(await readDB());
     const name = String(req.body?.name || '').trim();
@@ -291,7 +291,7 @@ app.post('/api/auth/users', requireAuth, requireStaff, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/auth/users/:id', requireAuth, requireStaff, async (req, res) => {
+app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     const db = ensureAuthState(await readDB());
     const user = db.users.find(u => u.id === req.params.id);
