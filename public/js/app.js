@@ -416,6 +416,9 @@ function setupEventListeners() {
 // --- Authentication / User Management ---
 function openSignupModal(adminCreate = false) {
   if (!signupModal) return;
+  // Public supporter signup must appear above the login screen.
+  // Keep the login screen in place so closing signup returns to login.
+  signupModal.style.zIndex = '100000';
   const form = document.getElementById('signup-form');
   const title = signupModal.querySelector('h3');
   const subtitle = signupModal.querySelector('.modal-subtitle');
