@@ -280,7 +280,9 @@ async function loadQuartersList() {
 async function loadQuarterDetails(quarterId) {
   try {
     const res = await fetch(`/api/quarters/${quarterId}`);
-    const quarter = await res.json();
+    const quarter = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(quarter.error || `HTTP ${res.status}`);
+    if (!Array.isArray(quarter.entries)) throw new Error('Quarter response is missing entries');
     state.currentQuarter = quarter;
     state.pendingChanges = {};
     renderPendingChanges();
@@ -416,6 +418,74 @@ function toggleAllView(show) {
     tableHeaderTitle.textContent = 'All Mission Support Records';
     visibleCount.textContent = 'All quarters';
   }
+}
+
+function normalizePastorType(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'local') return 'Local';
+  if (v === 'foreign') return 'Foreign';
+  return 'Unassigned';
+}
+
+function entryMetrics(entry) {
+  const months = [entry?.m1, entry?.m2, entry?.m3].map(statusMetrics);
+  return {
+    checked: months.reduce((sum, m) => sum + m.checked, 0),
+    total: months.reduce((sum, m) => sum + m.total, 0)
+  };
+}
+
+function isEntryComplete(entry) {
+  const m = entryMetrics(entry || {});
+  return m.total > 0 && m.checked === m.total;
+}
+
+function isLatestQuarter(q) {
+  if (!q) return false;
+  if (!state.quarters?.length) return false;
+  const latest = state.quarters[state.quarters.length - 1];
+  return latest?.id === q.id;
+}
+
+function filterEntriesForDisplay(q, entries) {
+  let out = Array.isArray(entries) ? entries.slice() : [];
+  const pastorType = state.pastorTypeFilter || 'All';
+  const status = state.statusFilter || 'All';
+
+  if (pastorType !== 'All') {
+    out = out.filter(e => normalizePastorType(e.pastorType) === pastorType);
+  }
+
+  // Per the tracker requirement, the latest/current quarter always remains
+  // fully visible even when an incomplete/completed status filter is chosen.
+  if (status !== 'All' && !isLatestQuarter(q)) {
+    out = out.filter(e => status === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
+  }
+
+  const search = state.searchQuery || '';
+  if (search) {
+    out = out.filter(e => {
+      const haystack = `${e.name || ''} ${e.number || ''} ${e.rawName || ''}`.toLowerCase();
+      return haystack.includes(search);
+    });
+  }
+
+  return out;
+}
+
+function renderStatusBadge(entry) {
+  const m = entryMetrics(entry || {});
+  const pct = m.total ? Math.round((m.checked / m.total) * 100) : 0;
+  let badgeClass = 'none';
+  let badgeText = `${m.checked}/${m.total} None`;
+  if (m.checked === m.total && m.total > 0) {
+    badgeClass = 'full';
+    badgeText = `${m.checked}/${m.total} Full`;
+  } else if (m.checked > 0) {
+    badgeClass = 'partial';
+    badgeText = `${m.checked}/${m.total} Partial`;
+  }
+  return { badgeClass, badgeText, checked: m.checked, total: m.total, percent: pct };
 }
 
 function renderAllView() {
