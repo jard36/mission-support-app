@@ -78,6 +78,16 @@ function setupAuthListeners() {
   const form = document.getElementById('login-form');
   if (form) form.addEventListener('submit', handleLogin);
   document.getElementById('btn-open-signup')?.addEventListener('click', () => openSignupModal(false));
+  const togglePassword = document.getElementById('toggle-login-password');
+  const loginPassword = document.getElementById('login-password');
+  togglePassword?.addEventListener('click', () => {
+    if (!loginPassword) return;
+    const showing = loginPassword.type === 'text';
+    loginPassword.type = showing ? 'password' : 'text';
+    togglePassword.innerHTML = `<i class="fa-solid ${showing ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
+    togglePassword.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    togglePassword.setAttribute('title', showing ? 'Show password' : 'Hide password');
+  });
   document.getElementById('modal-signup-close')?.addEventListener('click', closeSignupModal);
   document.getElementById('btn-signup-cancel')?.addEventListener('click', closeSignupModal);
   document.getElementById('signup-form')?.addEventListener('submit', handleSignup);

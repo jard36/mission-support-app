@@ -21,9 +21,9 @@
     </div>
     <form id="login-form" class="login-form" autocomplete="on">
       <label for="login-username">Username</label>
-      <div class="login-input-wrap"><i class="fa-solid fa-user"></i><input id="login-username" name="username" type="text" autocomplete="username" placeholder="Enter username" required></div>
+      <div class="login-input-wrap"><i class="fa-solid fa-user login-field-icon"></i><input id="login-username" name="username" type="text" autocomplete="username" placeholder="Enter username" required></div>
       <label for="login-password">Password</label>
-      <div class="login-input-wrap"><i class="fa-solid fa-lock"></i><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required></div>
+      <div class="login-input-wrap password-wrap"><i class="fa-solid fa-lock login-field-icon"></i><input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required><button type="button" class="password-toggle" id="toggle-login-password" aria-label="Show password" title="Show password"><i class="fa-solid fa-eye"></i></button></div>
       <div id="login-error" class="login-error" role="alert" style="display:none"></div>
       <button type="submit" id="btn-login" class="btn btn-primary login-btn"><i class="fa-solid fa-right-to-bracket"></i> Sign In</button>
     </form>
