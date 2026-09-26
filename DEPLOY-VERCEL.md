@@ -36,3 +36,16 @@ If `DATABASE_URL` is absent, the app intentionally uses the local JSON database.
 ## Important
 
 Do not commit a real `DATABASE_URL` or database password to GitHub. Put it in Vercel Environment Variables (and a local `.env` file only if needed). `.env` files are ignored by the project.
+
+## Reminder / Notification environment variables
+
+For Email + SMS reminders, add these in Vercel Project Settings → Environment Variables:
+
+- `RESEND_API_KEY` — your Resend API key.
+- `RESEND_FROM_EMAIL` — a verified Resend sender address. `onboarding@resend.dev` is suitable only for development/testing where Resend permits it.
+- `IPROG_SMS_API_TOKEN` — your IPROG SMS API token.
+- `CRON_SECRET` — a private random secret used to protect the scheduled reminder endpoint.
+
+The scheduled reminder endpoint is `/api/notifications/cron`. Vercel Cron is configured to check it daily at 00:00 UTC (08:00 Philippines time). The reminder settings determine whether a monthly or quarterly reminder is due that day.
+
+Never put any of these values in frontend JavaScript or commit a real `.env` file to GitHub.

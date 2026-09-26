@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const pptxgen = require('pptxgenjs');
+const { Resend } = require('resend');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -162,8 +163,10 @@ function getSupporterEntryFilter(user) {
 }
 
 function filterQuarterForUser(q, user) {
-  if (user?.role !== 'supporter') return q;
-  return { ...q, entries: (q.entries || []).filter(getSupporterEntryFilter(user)) };
+  if (!q) return q;
+  const activeEntries = (q.entries || []).filter(e => !e.hidden);
+  if (user?.role !== 'supporter') return { ...q, entries: activeEntries };
+  return { ...q, entries: activeEntries.filter(getSupporterEntryFilter(user)) };
 }
 
 // Login/session endpoints remain public. All mission data APIs below are protected.
@@ -369,6 +372,274 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+const DEFAULT_NOTIFICATION_SETTINGS = {
+  monthly: {
+    enabled: true,
+    daysBefore: 5,
+    subject: 'Mission Support Reminder — {{month}}',
+    emailMessage: 'Hello {{name}},\n\nThis is a reminder regarding your mission support for {{month}}. Please review your support record before the deadline on {{deadline}}.\n\nPastors with pending support: {{pastors}}\n\nThank you for your faithful support.\nLiving Hope Baptist Church',
+    smsMessage: 'Hi {{name}}, reminder: please review your mission support for {{month}} before {{deadline}}. Pending: {{pastors}}. Thank you — Living Hope Baptist Church.'
+  },
+  quarterly: {
+    enabled: true,
+    daysBefore: 5,
+    subject: 'Mission Support Reminder — {{quarter}}',
+    emailMessage: 'Hello {{name}},\n\nThis is a reminder to review your mission support records for {{quarter}} before the quarter deadline on {{deadline}}.\n\nPastors with pending support: {{pastors}}\n\nThank you for your faithful support.\nLiving Hope Baptist Church',
+    smsMessage: 'Hi {{name}}, reminder: please review your mission support for {{quarter}} before {{deadline}}. Pending: {{pastors}}. Thank you — Living Hope Baptist Church.'
+  },
+  channels: { email: true, sms: true }
+};
+
+function cloneDefaultNotificationSettings() {
+  return JSON.parse(JSON.stringify(DEFAULT_NOTIFICATION_SETTINGS));
+}
+
+function ensureNotificationState(db) {
+  const defaults = cloneDefaultNotificationSettings();
+  const current = db.notificationSettings || {};
+  db.notificationSettings = {
+    ...defaults,
+    ...current,
+    monthly: { ...defaults.monthly, ...(current.monthly || {}) },
+    quarterly: { ...defaults.quarterly, ...(current.quarterly || {}) },
+    channels: { ...defaults.channels, ...(current.channels || {}) }
+  };
+  if (!Array.isArray(db.notificationLog)) db.notificationLog = [];
+  return db;
+}
+
+function manilaDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date).reduce((out, p) => { if (p.type !== 'literal') out[p.type] = p.value; return out; }, {});
+  return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day) };
+}
+
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function formatManilaDate(year, month, day) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', year: 'numeric', month: 'long', day: 'numeric' })
+    .format(new Date(Date.UTC(year, month - 1, day, 12)));
+}
+
+function currentQuarterForManilaDate(db, date = new Date()) {
+  const d = manilaDateParts(date);
+  const qNum = Math.ceil(d.month / 3);
+  return db.quarters.find(q => Number(q.year) === d.year && Number(q.quarterNum) === qNum) || null;
+}
+
+function assignedEntriesForUser(user, quarter) {
+  const assigned = Array.isArray(user?.assignedPastors) ? user.assignedPastors : (user?.assignedPastor ? [user.assignedPastor] : []);
+  if (!assigned.length || !quarter) return [];
+  return (quarter.entries || []).filter(entry => !entry.hidden && assigned.some(p =>
+    normalizePastorKey(p.name, p.number) === normalizePastorKey(entry.name, entry.number) ||
+    (String(p.name || '').trim().toLowerCase() === String(entry.name || '').trim().toLowerCase() && (!p.number || String(p.number) === String(entry.number)))
+  ));
+}
+
+function dueSummaryForUser(user, quarter, kind, date = new Date()) {
+  const entries = assignedEntriesForUser(user, quarter);
+  if (!entries.length) return null;
+  const d = manilaDateParts(date);
+  const monthIndex = ((d.month - 1) % 3);
+  const monthKey = `m${monthIndex + 1}`;
+  const monthName = quarter.months?.[monthIndex] || d.month;
+  let due = entries;
+  if (kind === 'monthly') due = entries.filter(e => { const m = statusMetrics(e[monthKey]); return m.checked < m.total; });
+  if (kind === 'quarterly') due = entries.filter(e => !isEntryComplete(e));
+  if (!due.length) return null;
+  return {
+    pastors: due.map(e => e.name),
+    month: monthName,
+    monthKey,
+    quarter: quarter.quarterName ? `${quarter.year} ${quarter.quarterName}` : quarter.id
+  };
+}
+
+function notificationPeriod(kind, date = new Date()) {
+  const d = manilaDateParts(date);
+  const qNum = Math.ceil(d.month / 3);
+  if (kind === 'monthly') return `${d.year}-${String(d.month).padStart(2, '0')}`;
+  return `${d.year}-Q${qNum}`;
+}
+
+function renderNotificationTemplate(template, context) {
+  return String(template || '')
+    .replace(/{{\s*name\s*}}/gi, context.name || '')
+    .replace(/{{\s*month\s*}}/gi, context.month || '')
+    .replace(/{{\s*quarter\s*}}/gi, context.quarter || '')
+    .replace(/{{\s*deadline\s*}}/gi, context.deadline || '')
+    .replace(/{{\s*pastors\s*}}/gi, context.pastors || '')
+    .replace(/{{\s*year\s*}}/gi, context.year || '');
+}
+
+function normalizePHPhone(value) {
+  let phone = String(value || '').replace(/[^0-9+]/g, '');
+  if (phone.startsWith('+63')) phone = phone.slice(1);
+  if (phone.startsWith('09') && phone.length === 11) phone = '63' + phone.slice(1);
+  if (phone.startsWith('63') && phone.length === 12) return phone;
+  return '';
+}
+
+async function sendReminderEmail({ to, subject, text }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('RESEND_API_KEY is not configured.');
+  const from = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  const resend = new Resend(apiKey);
+  const html = String(text || '').split(/\n{2,}/).map(block => `<p>${escapeHtmlServer(block).replace(/\n/g, '<br>')}</p>`).join('');
+  const result = await resend.emails.send({ from, to: [to], subject, text, html });
+  if (result?.error) throw new Error(result.error.message || 'Resend email failed.');
+  return result?.data?.id || null;
+}
+
+function escapeHtmlServer(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+}
+
+async function sendReminderSMS({ to, message }) {
+  const apiToken = process.env.IPROG_SMS_API_TOKEN;
+  if (!apiToken) throw new Error('IPROG_SMS_API_TOKEN is not configured.');
+  const response = await fetch('https://www.iprogsms.com/api/v1/sms_messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_token: apiToken, phone_number: to, message })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || Number(data?.status) !== 200) throw new Error(data?.message || `IPROG SMS request failed (${response.status}).`);
+  return data?.message_id || null;
+}
+
+async function sendNotificationBatch(db, { kind, recipientMode, userIds = [], channels = {}, manual = true, now = new Date() }) {
+  ensureAuthState(db);
+  ensureNotificationState(db);
+  const settings = db.notificationSettings;
+  const typeSettings = settings[kind];
+  if (!typeSettings?.enabled && !manual) return { sent: 0, skipped: 0, failed: 0, reason: `${kind} reminders are disabled.` };
+  const quarter = currentQuarterForManilaDate(db, now);
+  if (!quarter) return { sent: 0, skipped: 0, failed: 0, reason: 'No quarter exists for the current Manila date.' };
+
+  const d = manilaDateParts(now);
+  const deadlineMonth = kind === 'quarterly' ? Math.ceil(d.month / 3) * 3 : d.month;
+  const deadlineDay = daysInMonth(d.year, deadlineMonth);
+  const deadline = formatManilaDate(d.year, deadlineMonth, deadlineDay);
+  const period = notificationPeriod(kind, now);
+  const allUsers = db.users.filter(u => u.status === 'active');
+  let recipients = allUsers;
+  if (recipientMode === 'month' || recipientMode === 'quarter') {
+    recipients = allUsers.filter(u => u.role === 'supporter' && dueSummaryForUser(u, quarter, kind, now));
+  } else if (recipientMode === 'selected') {
+    const wanted = new Set((userIds || []).map(String));
+    recipients = allUsers.filter(u => wanted.has(String(u.id)));
+  }
+
+  const emailEnabled = channels.email !== false && settings.channels.email !== false;
+  const smsEnabled = channels.sms !== false && settings.channels.sms !== false;
+  const results = { sent: 0, skipped: 0, failed: 0, recipients: recipients.length, details: [] };
+
+  for (const user of recipients) {
+    const summary = dueSummaryForUser(user, quarter, kind, now) || {
+      pastors: [],
+      month: quarter.months?.[((d.month - 1) % 3)] || '',
+      monthKey: `m${((d.month - 1) % 3) + 1}`,
+      quarter: `${quarter.year} ${quarter.quarterName}`
+    };
+    const context = {
+      name: user.name || user.username,
+      month: summary.month,
+      quarter: summary.quarter,
+      deadline,
+      pastors: summary.pastors.join(', '),
+      year: String(d.year)
+    };
+    const channelsToSend = [];
+    if (emailEnabled && user.email) channelsToSend.push('email');
+    if (smsEnabled && normalizePHPhone(user.phone)) channelsToSend.push('sms');
+    if (!channelsToSend.length) {
+      results.skipped++;
+      results.details.push({ userId: user.id, name: user.name, status: 'skipped', reason: 'No usable email or SMS contact.' });
+      continue;
+    }
+
+    for (const channel of channelsToSend) {
+      const dedupeKey = `${kind}:${period}:${user.id}:${channel}`;
+      if (db.notificationLog.some(item => item.dedupeKey === dedupeKey && item.status === 'sent')) {
+        results.skipped++;
+        continue;
+      }
+      const log = {
+        id: `notification-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+        dedupeKey, kind, period, userId: user.id, userName: user.name || user.username,
+        channel, sentAt: new Date().toISOString(), status: 'failed'
+      };
+      try {
+        if (channel === 'email') {
+          log.providerMessageId = await sendReminderEmail({
+            to: user.email,
+            subject: renderNotificationTemplate(typeSettings.subject, context),
+            text: renderNotificationTemplate(typeSettings.emailMessage, context)
+          });
+        } else {
+          log.providerMessageId = await sendReminderSMS({
+            to: normalizePHPhone(user.phone),
+            message: renderNotificationTemplate(typeSettings.smsMessage, context)
+          });
+        }
+        log.status = 'sent';
+        results.sent++;
+      } catch (err) {
+        log.error = err.message;
+        results.failed++;
+      }
+      db.notificationLog.unshift(log);
+      if (db.notificationLog.length > 5000) db.notificationLog.length = 5000;
+      results.details.push({ userId: user.id, name: user.name, channel, status: log.status, error: log.error || null });
+    }
+  }
+  await writeDB(db);
+  return results;
+}
+
+function isScheduledReminderDay(kind, settings, date = new Date()) {
+  const d = manilaDateParts(date);
+  const days = daysInMonth(d.year, d.month);
+  const daysBefore = Math.max(0, Number(settings?.daysBefore ?? 5));
+  const monthlyDue = d.day === Math.max(1, days - daysBefore);
+  const quarterMonth = [3, 6, 9, 12].includes(d.month);
+  const quarterlyDue = quarterMonth && monthlyDue;
+  return kind === 'monthly' ? monthlyDue : quarterlyDue;
+}
+
+async function runScheduledNotifications() {
+  const db = normalizeDB(await readDB());
+  ensureNotificationState(db);
+  const now = new Date();
+  const outcomes = [];
+  for (const kind of ['monthly', 'quarterly']) {
+    const settings = db.notificationSettings[kind];
+    if (!settings.enabled || !isScheduledReminderDay(kind, settings, now)) continue;
+    const mode = kind === 'monthly' ? 'month' : 'quarter';
+    outcomes.push({ kind, result: await sendNotificationBatch(db, { kind, recipientMode: mode, channels: db.notificationSettings.channels, manual: false, now }) });
+  }
+  return outcomes;
+}
+
+// Vercel Cron / external scheduler entry point. Keep the secret server-side.
+app.get('/api/notifications/cron', async (req, res) => {
+  const expected = process.env.CRON_SECRET;
+  const auth = req.headers.authorization || '';
+  if (!expected && process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'CRON_SECRET is not configured.' });
+  if (expected && auth !== `Bearer ${expected}`) return res.status(401).json({ error: 'Unauthorized cron request.' });
+  try {
+    const result = await runScheduledNotifications();
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error('Scheduled notification error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.use('/api', requireAuth);
 
 function ensureAuditTrail(db) {
@@ -389,11 +660,6 @@ function addAudit(db, req, action, details = {}) {
   if (auditTrail.length > 2000) auditTrail.length = 2000;
 }
 
-function ensureRecycleBin(db) {
-  if (!Array.isArray(db.recycleBin)) db.recycleBin = [];
-  return db.recycleBin;
-}
-
 function normalizePastorType(value) {
   const v = String(value || '').trim().toLowerCase();
   if (v === 'local') return 'Local';
@@ -403,6 +669,7 @@ function normalizePastorType(value) {
 
 function normalizeEntry(entry) {
   entry.pastorType = normalizePastorType(entry.pastorType);
+  entry.hidden = entry.hidden === true;
   return entry;
 }
 
@@ -412,8 +679,8 @@ function normalizeDB(db) {
     if (!Array.isArray(q.entries)) q.entries = [];
     q.entries.forEach(normalizeEntry);
   });
-  ensureRecycleBin(db);
   ensureAuditTrail(db);
+  ensureNotificationState(db);
   return db;
 }
 
@@ -447,7 +714,7 @@ function isEntryComplete(entry) {
 }
 
 function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', currentLatest = false } = {}) {
-  let entries = (q.entries || []).map(normalizeEntry);
+  let entries = (q.entries || []).map(normalizeEntry).filter(e => !e.hidden);
   if (pastorType && pastorType !== 'All') entries = entries.filter(e => e.pastorType === pastorType);
   if (statusFilter && statusFilter !== 'All' && !currentLatest) {
     entries = entries.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
@@ -460,7 +727,7 @@ app.get('/api/quarters', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const summary = db.quarters.map(q => {
-      const visibleEntries = q.entries.filter(getSupporterEntryFilter(req.user));
+      const visibleEntries = q.entries.filter(e => !e.hidden).filter(getSupporterEntryFilter(req.user));
       const total = visibleEntries.length;
       const countM1 = visibleEntries.filter(e => e.m1 && e.m1.includes('✓')).length;
       const countM2 = visibleEntries.filter(e => e.m2 && e.m2.includes('✓')).length;
@@ -531,7 +798,7 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
     if (copyFromQuarterId) {
       const sourceQ = db.quarters.find(q => q.id === copyFromQuarterId);
       if (sourceQ) {
-        entries = sourceQ.entries.map((e, idx) => ({
+        entries = sourceQ.entries.filter(e => !e.hidden).map((e, idx) => ({
           id: `${qKey}-${idx + 1}`,
           number: e.number || (idx + 1),
           name: e.name,
@@ -540,7 +807,8 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
           m2: '',
           m3: '',
           notes: '',
-          pastorType: normalizePastorType(e.pastorType)
+          pastorType: normalizePastorType(e.pastorType),
+          hidden: false
         }));
       }
     }
@@ -558,9 +826,9 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
     db.quarters.push(newQuarter);
     db.quarters.sort((a, b) => a.id.localeCompare(b.id));
     addAudit(db, req, 'Quarter Created', { quarterId: qKey, description: `${qKey} was created` });
-    await writeDB(db);
+    await writeDB(db, { touchLastUpdated: true });
 
-    res.status(201).json(newQuarter);
+    res.status(201).json({ ...newQuarter, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -574,8 +842,8 @@ app.delete('/api/quarters/:id', requireStaff, async (req, res) => {
     if (idx === -1) return res.status(404).json({ error: 'Quarter not found' });
     const deleted = db.quarters.splice(idx, 1);
     addAudit(db, req, 'Quarter Deleted', { quarterId: deleted[0].id, description: `${deleted[0].id} was deleted` });
-    await writeDB(db);
-    res.json({ message: 'Quarter deleted', deleted: deleted[0].id });
+    await writeDB(db, { touchLastUpdated: true });
+    res.json({ message: 'Quarter deleted', deleted: deleted[0].id, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -592,7 +860,8 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
     const pastorName = name.trim();
-    const num = number ? parseInt(number) : (quarter.entries.length + 1);
+    const maxNumber = quarter.entries.reduce((max, e) => Math.max(max, Number(e.number) || 0), 0);
+    const num = number ? parseInt(number) : (maxNumber + 1);
 
     const now = new Date().toISOString();
     const newEntry = {
@@ -605,6 +874,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
       m3: m3 || '',
       notes: notes || '',
       pastorType: normalizePastorType(pastorType),
+      hidden: false,
       updatedAt: now
     };
 
@@ -614,8 +884,8 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
     // Optional: add to all active quarters
     if (addToAllQuarters) {
       db.quarters.forEach(q => {
-        if (q.id !== quarter.id && !q.entries.some(e => e.name.toLowerCase() === pastorName.toLowerCase())) {
-          const nextNum = q.entries.length + 1;
+        if (q.id !== quarter.id && !q.entries.some(e => !e.hidden && e.name.toLowerCase() === pastorName.toLowerCase())) {
+          const nextNum = q.entries.reduce((max, e) => Math.max(max, Number(e.number) || 0), 0) + 1;
           q.entries.push({
             id: `${q.id}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
             number: nextNum,
@@ -626,14 +896,15 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
             m3: '',
             notes: '',
             pastorType: normalizePastorType(pastorType),
+            hidden: false,
             updatedAt: now
           });
         }
       });
     }
 
-    await writeDB(db);
-    res.status(201).json(newEntry);
+    await writeDB(db, { touchLastUpdated: true });
+    res.status(201).json({ entry: newEntry, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -642,7 +913,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
 // 6. PUT update Pastor entry
 app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, res) => {
   try {
-    const { name, number, m1, m2, m3, notes, pastorType } = req.body;
+    const { name, number, m1, m2, m3, notes, pastorType, hidden, included } = req.body;
     const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
@@ -650,91 +921,88 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
     const entry = quarter.entries.find(e => e.id === req.params.entryId);
     if (!entry) return res.status(404).json({ error: 'Pastor entry not found' });
 
-    const before = { name: entry.name, number: entry.number, m1: entry.m1 || '', m2: entry.m2 || '', m3: entry.m3 || '', notes: entry.notes || '', pastorType: normalizePastorType(entry.pastorType) };
-    const now = new Date().toISOString();
-    if (name !== undefined) entry.name = name.trim();
-    if (number !== undefined) entry.number = parseInt(number);
-    if (m1 !== undefined) entry.m1 = m1;
-    if (m2 !== undefined) entry.m2 = m2;
-    if (m3 !== undefined) entry.m3 = m3;
-    if (notes !== undefined) entry.notes = notes;
-    if (pastorType !== undefined) entry.pastorType = normalizePastorType(pastorType);
-    entry.updatedAt = now;
-    entry.rawName = `${entry.number}. ${entry.name}`;
+    const before = {
+      name: entry.name,
+      number: entry.number,
+      m1: entry.m1 || '', m2: entry.m2 || '', m3: entry.m3 || '',
+      notes: entry.notes || '',
+      pastorType: normalizePastorType(entry.pastorType),
+      hidden: entry.hidden === true
+    };
+
+    const candidate = {
+      name: name !== undefined ? String(name).trim() : entry.name,
+      number: number !== undefined ? parseInt(number) : entry.number,
+      m1: m1 !== undefined ? m1 : (entry.m1 || ''),
+      m2: m2 !== undefined ? m2 : (entry.m2 || ''),
+      m3: m3 !== undefined ? m3 : (entry.m3 || ''),
+      notes: notes !== undefined ? String(notes) : (entry.notes || ''),
+      pastorType: pastorType !== undefined ? normalizePastorType(pastorType) : normalizePastorType(entry.pastorType),
+      hidden: hidden !== undefined ? Boolean(hidden) : (included !== undefined ? !Boolean(included) : entry.hidden === true)
+    };
+    if (!candidate.name) return res.status(400).json({ error: 'Pastor name is required' });
+    if (!Number.isFinite(candidate.number) || candidate.number < 1) return res.status(400).json({ error: 'Pastor number must be a positive number' });
 
     const changes = [];
-    ['name','number','m1','m2','m3','notes','pastorType'].forEach(key => {
-      const after = entry[key] ?? '';
+    ['name','number','m1','m2','m3','notes','pastorType','hidden'].forEach(key => {
+      const after = candidate[key] ?? '';
       if (String(before[key] ?? '') !== String(after)) {
         const monthName = key === 'm1' ? quarter.months?.[0] : key === 'm2' ? quarter.months?.[1] : key === 'm3' ? quarter.months?.[2] : null;
-        changes.push({ field: monthName || key, from: before[key] ?? '', to: after });
+        changes.push({ field: key === 'hidden' ? (after ? 'included' : 'hidden') : (monthName || key), from: before[key] ?? '', to: after });
       }
     });
-    if (changes.length) {
-      addAudit(db, req, changes.some(c => ['m1','m2','m3'].includes(c.field) || quarter.months?.includes(c.field)) ? 'Support Updated' : 'Pastor Edited', {
-        quarterId: quarter.id, entryId: entry.id, pastorName: entry.name, changes,
-        description: `${entry.name} was updated in ${quarter.id}`
-      });
+
+    if (!changes.length) {
+      return res.json({ entry, lastUpdated: db.lastUpdated });
     }
 
-    await writeDB(db);
-    res.json(entry);
+    Object.assign(entry, candidate);
+    entry.rawName = `${entry.number}. ${entry.name}`;
+    entry.updatedAt = new Date().toISOString();
+
+    const supportChanged = changes.some(c => quarter.months?.includes(c.field));
+    addAudit(db, req, supportChanged ? 'Support Updated' : (changes.some(c => ['hidden','included'].includes(c.field)) ? (entry.hidden ? 'Pastor Hidden' : 'Pastor Restored') : 'Pastor Edited'), {
+      quarterId: quarter.id,
+      entryId: entry.id,
+      pastorName: entry.name,
+      changes,
+      description: `${entry.name} was updated in ${quarter.id}`
+    });
+
+    await writeDB(db, { touchLastUpdated: true });
+    res.json({ entry, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// 7. Legacy delete route intentionally disabled. Pastors are now hidden/restored and never permanently deleted.
+app.delete('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, res) => {
+  return res.status(410).json({ error: 'Pastor deletion has been replaced by Include/Exclude (Hide/Restore).' });
 });
 
 // 7. DELETE Pastor entry
-app.delete('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    const quarter = db.quarters.find(q => q.id === req.params.quarterId);
-    if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
-
-    const idx = quarter.entries.findIndex(e => e.id === req.params.entryId);
-    if (idx === -1) return res.status(404).json({ error: 'Pastor entry not found' });
-
-    const removed = quarter.entries.splice(idx, 1);
-    const deletedEntry = { ...normalizeEntry(removed[0]), deletedAt: new Date().toISOString(), deletedFromQuarterId: quarter.id, deletedFromQuarterTitle: quarter.title, deletedFromNumber: removed[0].number || (idx + 1) };
-    ensureRecycleBin(db).unshift(deletedEntry);
-    addAudit(db, req, 'Pastor Deleted', { quarterId: quarter.id, entryId: deletedEntry.id, pastorName: deletedEntry.name, description: `${deletedEntry.name} was moved to the Recycle Bin from ${quarter.id}` });
-    // Renumber remaining pastors
-    quarter.entries.forEach((e, i) => {
-      e.number = i + 1;
-      e.rawName = `${e.number}. ${e.name}`;
-    });
-
-    await writeDB(db);
-    res.json({ message: 'Pastor moved to Recycle Bin', removed: deletedEntry });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // 8. POST bulk update support status
 app.post('/api/quarters/:quarterId/bulk', requireStaff, async (req, res) => {
   try {
-    const { monthKey, action } = req.body; // monthKey: 'm1' | 'm2' | 'm3' | 'all', action: 'check' | 'uncheck'
+    const { monthKey, action } = req.body;
     const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
-
     const val = action === 'check' ? '✓' : '';
     const now = new Date().toISOString();
-    quarter.entries.forEach(e => {
-      if (monthKey === 'all') {
-        e.m1 = val;
-        e.m2 = val;
-        e.m3 = val;
-      } else if (['m1', 'm2', 'm3'].includes(monthKey)) {
-        e[monthKey] = val;
-      }
-      e.updatedAt = now;
+    let changedCount = 0;
+    quarter.entries.filter(e => !e.hidden).forEach(e => {
+      const keys = monthKey === 'all' ? ['m1','m2','m3'] : (['m1','m2','m3'].includes(monthKey) ? [monthKey] : []);
+      let changed = false;
+      keys.forEach(key => { if (String(e[key] || '') !== val) { e[key] = val; changed = true; } });
+      if (changed) { e.updatedAt = now; changedCount++; }
     });
-
-    addAudit(db, req, 'Bulk Support Updated', { quarterId: quarter.id, monthKey, action, description: `${action === 'check' ? 'Marked' : 'Cleared'} ${monthKey} for all pastors in ${quarter.id}` });
-    await writeDB(db);
-    res.json({ message: 'Bulk update applied', quarter });
+    if (changedCount) {
+      addAudit(db, req, 'Bulk Support Updated', { quarterId: quarter.id, monthKey, action, changedCount, description: `${action === 'check' ? 'Marked' : 'Cleared'} ${monthKey} for ${changedCount} pastor record(s) in ${quarter.id}` });
+      await writeDB(db, { touchLastUpdated: true });
+    }
+    res.json({ message: 'Bulk update applied', quarter, changedCount, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -754,23 +1022,24 @@ app.post('/api/quarters/:quarterId/batch-save', requireStaff, async (req, res) =
     const auditChanges = [];
     let updatedCount = 0;
     updates.forEach(u => {
-      const entry = quarter.entries.find(e => e.id === u.id);
+      const entry = quarter.entries.find(e => e.id === u.id && !e.hidden);
       if (!entry) return;
       const before = { m1: entry.m1 || '', m2: entry.m2 || '', m3: entry.m3 || '', notes: entry.notes || '' };
       if (u.m1 !== undefined) entry.m1 = u.m1;
       if (u.m2 !== undefined) entry.m2 = u.m2;
       if (u.m3 !== undefined) entry.m3 = u.m3;
       if (u.notes !== undefined) entry.notes = u.notes;
-      entry.updatedAt = now;
 
+      let changed = false;
       ['m1','m2','m3','notes'].forEach(key => {
         const after = entry[key] ?? '';
         if (String(before[key]) !== String(after)) {
+          changed = true;
           const monthName = key === 'm1' ? quarter.months?.[0] : key === 'm2' ? quarter.months?.[1] : key === 'm3' ? quarter.months?.[2] : 'Notes';
           auditChanges.push({ pastorName: entry.name, field: monthName, from: before[key], to: after });
         }
       });
-      updatedCount++;
+      if (changed) { entry.updatedAt = now; updatedCount++; }
     });
 
     if (auditChanges.length) {
@@ -781,64 +1050,113 @@ app.post('/api/quarters/:quarterId/batch-save', requireStaff, async (req, res) =
         description: `${auditChanges.length} status change(s) saved across ${updatedCount} pastor record(s) in ${quarter.id}`
       });
     }
-    await writeDB(db);
+    if (auditChanges.length) await writeDB(db, { touchLastUpdated: true });
     res.json({ message: 'Batch updates saved successfully', updatedCount, quarter, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 9. Recycle Bin
-app.get('/api/recycle-bin', requireStaff, async (req, res) => {
+// Hidden pastors: excluded records remain in the database and can be restored.
+app.get('/api/hidden-pastors', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
-    res.json({ recycleBin: db.recycleBin || [], lastUpdated: db.lastUpdated || null });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    const hidden = [];
+    db.quarters.forEach(q => (q.entries || []).filter(e => e.hidden).forEach(entry => {
+      hidden.push({
+        ...entry,
+        quarterId: q.id,
+        quarterTitle: q.title,
+        year: q.year,
+        quarterName: q.quarterName
+      });
+    }));
+    hidden.sort((a, b) => `${b.year}-${b.quarterId}`.localeCompare(`${a.year}-${a.quarterId}`) || (Number(a.number) - Number(b.number)));
+    res.json({ hidden });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/recycle-bin/:entryId/restore', requireStaff, async (req, res) => {
+app.get('/api/quarters/:id/hidden', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
-    const bin = ensureRecycleBin(db);
-    const idx = bin.findIndex(e => e.id === req.params.entryId);
-    if (idx === -1) return res.status(404).json({ error: 'Deleted pastor not found in Recycle Bin' });
-    const item = bin[idx];
-    const quarter = db.quarters.find(q => q.id === item.deletedFromQuarterId);
-    if (!quarter) return res.status(404).json({ error: 'Original quarter no longer exists' });
-    if (quarter.entries.some(e => e.id === item.id)) return res.status(400).json({ error: 'Pastor already exists in the original quarter' });
-    const restored = { ...item };
-    const originalNumber = Number(restored.deletedFromNumber) || (quarter.entries.length + 1);
-    delete restored.deletedAt;
-    delete restored.deletedFromQuarterId;
-    delete restored.deletedFromQuarterTitle;
-    delete restored.deletedFromNumber;
-    restored.pastorType = normalizePastorType(restored.pastorType);
-    const insertAt = Math.max(0, Math.min(originalNumber - 1, quarter.entries.length));
-    quarter.entries.splice(insertAt, 0, restored);
-    quarter.entries.forEach((e, i) => { e.number = i + 1; e.rawName = `${e.number}. ${e.name}`; });
-    restored.updatedAt = new Date().toISOString();
-    bin.splice(idx, 1);
-    addAudit(db, req, 'Pastor Restored', { quarterId: quarter.id, entryId: restored.id, pastorName: restored.name, description: `${restored.name} was restored to ${quarter.id}` });
-    await writeDB(db);
-    res.json({ message: 'Pastor restored successfully', restored, quarterId: quarter.id, lastUpdated: db.lastUpdated });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    const q = db.quarters.find(x => x.id === req.params.id);
+    if (!q) return res.status(404).json({ error: 'Quarter not found' });
+    res.json({ quarter: { ...q, entries: (q.entries || []).filter(e => e.hidden) } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/recycle-bin/:entryId', requireStaff, async (req, res) => {
+// Reminder / notification center
+app.get('/api/notifications/state', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
-    const bin = ensureRecycleBin(db);
-    const idx = bin.findIndex(e => e.id === req.params.entryId);
-    if (idx === -1) return res.status(404).json({ error: 'Deleted pastor not found in Recycle Bin' });
-    const removed = bin.splice(idx, 1)[0];
-    addAudit(db, req, 'Pastor Permanently Deleted', { quarterId: removed.deletedFromQuarterId, entryId: removed.id, pastorName: removed.name, description: `${removed.name} was permanently deleted from the Recycle Bin` });
+    ensureAuthState(db); ensureNotificationState(db);
+    const safeLog = db.notificationLog.slice(0, 100).map(item => ({
+      id: item.id, kind: item.kind, period: item.period, userId: item.userId,
+      userName: item.userName, channel: item.channel, sentAt: item.sentAt,
+      status: item.status, error: item.error || null
+    }));
+    res.json({ settings: db.notificationSettings, log: safeLog });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/notifications/settings', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    ensureNotificationState(db);
+    const incoming = req.body || {};
+    const current = db.notificationSettings;
+    for (const kind of ['monthly', 'quarterly']) {
+      if (incoming[kind]) {
+        current[kind].enabled = Boolean(incoming[kind].enabled);
+        current[kind].daysBefore = Math.min(30, Math.max(0, Number(incoming[kind].daysBefore ?? current[kind].daysBefore)));
+        current[kind].subject = String(incoming[kind].subject ?? current[kind].subject).slice(0, 200);
+        current[kind].emailMessage = String(incoming[kind].emailMessage ?? current[kind].emailMessage).slice(0, 10000);
+        current[kind].smsMessage = String(incoming[kind].smsMessage ?? current[kind].smsMessage).slice(0, 900);
+      }
+    }
+    if (incoming.channels) {
+      current.channels.email = Boolean(incoming.channels.email);
+      current.channels.sms = Boolean(incoming.channels.sms);
+    }
     await writeDB(db);
-    res.json({ message: 'Pastor permanently deleted', removed, lastUpdated: db.lastUpdated });
+    res.json({ settings: db.notificationSettings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/notifications/recipients', requireStaff, async (req, res) => {
+  try {
+    const db = normalizeDB(await readDB());
+    ensureAuthState(db); ensureNotificationState(db);
+    const kind = req.query.kind === 'quarterly' ? 'quarterly' : 'monthly';
+    const quarter = currentQuarterForManilaDate(db);
+    const users = db.users.filter(u => u.status === 'active').map(u => {
+      const summary = dueSummaryForUser(u, quarter, kind);
+      return {
+        id: u.id, name: u.name || u.username, username: u.username,
+        role: u.role, email: u.email || '', phone: u.phone || '',
+        hasEmail: Boolean(u.email), hasSms: Boolean(normalizePHPhone(u.phone)),
+        due: Boolean(summary), pastors: summary?.pastors || []
+      };
+    });
+    res.json({ kind, quarter: quarter ? { id: quarter.id, title: quarter.title, months: quarter.months } : null, users });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/notifications/send', requireStaff, async (req, res) => {
+  try {
+    const kind = req.body?.kind === 'quarterly' ? 'quarterly' : 'monthly';
+    const recipientMode = ['month','quarter','selected'].includes(req.body?.recipientMode) ? req.body.recipientMode : 'selected';
+    const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
+    const channels = {
+      email: req.body?.channels?.email !== false,
+      sms: req.body?.channels?.sms !== false
+    };
+    if (recipientMode === 'selected' && !userIds.length) return res.status(400).json({ error: 'Select at least one recipient.' });
+    const db = normalizeDB(await readDB());
+    const result = await sendNotificationBatch(db, { kind, recipientMode, userIds, channels, manual: true });
+    res.json(result);
   } catch (err) {
+    console.error('Manual notification error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -858,8 +1176,8 @@ app.post('/api/reset', requireAdmin, async (req, res) => {
   try {
     const db = normalizeDB(await resetDB());
     addAudit(db, req, 'Database Reset', { description: 'Database was reset to the original PowerPoint reference data' });
-    await writeDB(db);
-    res.json({ message: 'Database reset to original PowerPoint reference successfully', quartersCount: db.quarters.length });
+    await writeDB(db, { touchLastUpdated: true });
+    res.json({ message: 'Database reset to original PowerPoint reference successfully', quartersCount: db.quarters.length, lastUpdated: db.lastUpdated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1066,7 +1384,7 @@ app.get('/api/export/pptx-all', async (req, res) => {
 });
 
 // 13. Download JSON backup
-app.get('/api/backup', requireStaff, async (req, res) => {
+app.get('/api/backup', requireAdmin, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     res.setHeader('Content-Type', 'application/json');

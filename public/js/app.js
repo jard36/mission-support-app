@@ -63,7 +63,8 @@ const pastorModal = document.getElementById('pastor-modal');
 const quarterModal = document.getElementById('quarter-modal');
 const presentationModal = document.getElementById('presentation-modal');
 const reportModal = document.getElementById('report-modal');
-const recycleBinModal = document.getElementById('recycle-bin-modal');
+const hiddenPastorsModal = document.getElementById('hidden-pastors-modal');
+const notificationsModal = document.getElementById('notifications-modal');
 const signupModal = document.getElementById('signup-modal');
 const userManagementModal = document.getElementById('user-management-modal');
 
@@ -88,6 +89,8 @@ function setupAuthListeners() {
     togglePassword.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
     togglePassword.setAttribute('title', showing ? 'Show password' : 'Hide password');
   });
+  setupPasswordToggle('toggle-signup-password', 'signup-password');
+  setupPasswordToggle('toggle-signup-confirm-password', 'signup-confirm-password');
   document.getElementById('modal-signup-close')?.addEventListener('click', closeSignupModal);
   document.getElementById('btn-signup-cancel')?.addEventListener('click', closeSignupModal);
   document.getElementById('signup-form')?.addEventListener('submit', handleSignup);
@@ -96,6 +99,20 @@ function setupAuthListeners() {
   if (logout) logout.addEventListener('click', async (e) => {
     e.preventDefault();
     await signOut();
+  });
+}
+
+function setupPasswordToggle(buttonId, inputId) {
+  const button = document.getElementById(buttonId);
+  const input = document.getElementById(inputId);
+  if (!button || !input || button.dataset.bound === '1') return;
+  button.dataset.bound = '1';
+  button.addEventListener('click', () => {
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    button.innerHTML = `<i class="fa-solid ${showing ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
+    button.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    button.setAttribute('title', showing ? 'Show password' : 'Hide password');
   });
 }
 
@@ -176,9 +193,17 @@ function applyRoleUi() {
   if (management) management.style.display = staff ? '' : 'none';
   const createUserBtn = document.getElementById('btn-create-user');
   if (createUserBtn) createUserBtn.style.display = currentUser?.role === 'admin' ? '' : 'none';
-  ['action-add-quarter','action-audit-trail','action-recycle-bin','action-backup-json','action-reset-data'].forEach(id => {
+  ['action-add-quarter','action-audit-trail','action-hidden-pastors','action-notifications','btn-hidden-pastors'].forEach(id => {
     const el = document.getElementById(id); if (el) el.style.display = staff ? '' : 'none';
   });
+  ['action-backup-json','action-reset-data'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = currentUser?.role === 'admin' ? '' : 'none';
+  });
+  const bell = document.getElementById('btn-notification-bell');
+  if (bell) bell.style.display = staff ? '' : 'none';
+  document.querySelector('.notification-tab[data-tab="settings"]')?.style.setProperty('display', currentUser?.role === 'admin' ? '' : 'none');
+  const saveNotificationSettingsBtn = document.getElementById('btn-save-notification-settings');
+  if (saveNotificationSettingsBtn) saveNotificationSettingsBtn.style.display = currentUser?.role === 'admin' ? '' : 'none';
   ['btn-add-pastor','btn-save-changes','btn-quick-save','btn-discard-changes','month-bulk-bar'].forEach(id => {
     const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
   });
@@ -390,7 +415,7 @@ function setupEventListeners() {
     }
   });
 
-  // Report + Recycle Bin
+  // Report / Hidden Pastors / Notifications
   document.getElementById('btn-report').addEventListener('click', openReportModal);
   document.getElementById('btn-exit-report').addEventListener('click', exitReportMode);
   document.getElementById('modal-report-close').addEventListener('click', closeReportModal);
@@ -399,8 +424,10 @@ function setupEventListeners() {
   document.getElementById('report-clear-all').addEventListener('click', () => setAllReportQuarters(false));
   document.getElementById('btn-report-view').addEventListener('click', applyReportView);
   document.getElementById('btn-report-download').addEventListener('click', downloadReportPptx);
-  document.getElementById('action-recycle-bin').addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openRecycleBinModal(); });
-  document.getElementById('modal-recycle-close').addEventListener('click', closeRecycleBinModal);
+  document.getElementById('action-hidden-pastors')?.addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openHiddenPastorsModal(); });
+  document.getElementById('btn-hidden-pastors')?.addEventListener('click', openHiddenPastorsModal);
+  document.getElementById('action-notifications')?.addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openNotificationsModal(); });
+  document.getElementById('btn-notification-bell')?.addEventListener('click', openNotificationsModal);
 
   // Presentation Mode triggers
   document.getElementById('btn-present').addEventListener('click', openPresentationMode);
@@ -766,7 +793,7 @@ function isLatestQuarter(q) {
 }
 
 function filterEntriesForDisplay(q, entries) {
-  let out = Array.isArray(entries) ? entries.slice() : [];
+  let out = Array.isArray(entries) ? entries.filter(e => e.hidden !== true) : [];
   const pastorType = state.pastorTypeFilter || 'All';
   const status = state.statusFilter || 'All';
 
@@ -894,8 +921,8 @@ function renderTable() {
       <tr data-id="${escapeHtml(e.id)}">
         <td style="color: var(--text-subtle); font-weight: 700;">${e.number || (idx + 1)}</td>
         <td>
-          <div class="pastor-name-cell">
-            <span>${escapeHtml(e.name)}</span>
+          <div class="pastor-name-cell ${currentUser?.role === 'supporter' ? '' : 'pastor-name-editable'}" ${currentUser?.role === 'supporter' ? '' : `onclick="editPastor('${e.id}')" title="Click to edit pastor"`}>
+            <strong>${escapeHtml(e.name)}</strong>
             <span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span>
             ${e.notes ? `<span class="pastor-note-pill" title="${escapeHtml(e.notes)}"><i class="fa-regular fa-note-sticky"></i> ${escapeHtml(e.notes)}</span>` : ''}
           </div>
@@ -904,12 +931,7 @@ function renderTable() {
         <td style="text-align: center;">${renderStatusBtn(e, 'm2')}</td>
         <td style="text-align: center;">${renderStatusBtn(e, 'm3')}</td>
         <td style="text-align: center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td>
-        <td style="text-align: center;" class="pastor-actions-column">
-          ${currentUser?.role === 'supporter' ? '<span class="user-meta">View only</span>' : `<div class="actions-cell">
-            <button class="action-icon-btn btn-edit" title="Edit Pastor" onclick="editPastor('${e.id}')"><i class="fa-solid fa-pen-to-square"></i></button>
-            <button class="action-icon-btn btn-delete" title="Move to Recycle Bin" onclick="deletePastor('${e.id}')"><i class="fa-regular fa-trash-can"></i></button>
-          </div>`}
-        </td>
+
       </tr>`;
   });
   pastorsTbody.innerHTML = html;
@@ -1121,7 +1143,7 @@ async function savePendingChanges() {
     const data = await res.json();
     state.currentQuarter = data.quarter;
     state.pendingChanges = {};
-    updateLastUpdated(data.lastUpdated || new Date().toISOString());
+    updateLastUpdated(data.lastUpdated);
     renderQuarterStats();
     renderTable();
     renderPendingChanges();
@@ -1152,10 +1174,11 @@ async function toggleStatus(entryId, monthKey) {
       body: JSON.stringify({ [monthKey]: newVal })
     });
     if (!res.ok) throw new Error('Failed to update status');
-    const updated = await res.json();
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update status');
     const idx = state.currentQuarter.entries.findIndex(e => e.id === entryId);
-    if (idx !== -1) state.currentQuarter.entries[idx] = updated;
-    updateLastUpdated(new Date().toISOString());
+    if (idx !== -1) state.currentQuarter.entries[idx] = data.entry;
+    updateLastUpdated(data.lastUpdated);
     renderTable();
     renderQuarterStats();
     showToast(`${entry.name} — ${monthName} updated successfully.`, 'success');
@@ -1193,13 +1216,16 @@ window.editPastor = function(entryId) {
   const entry = state.currentQuarter.entries.find(e => e.id === entryId);
   if (!entry) return;
 
+  pastorModal.dataset.editQuarterId = state.currentQuarter.id;
   document.getElementById('modal-pastor-title').textContent = 'Edit Pastor / Missionary';
   document.getElementById('pastor-entry-id').value = entry.id;
   document.getElementById('pastor-number').value = entry.number || '';
   document.getElementById('pastor-name').value = entry.name || '';
   document.getElementById('pastor-type').value = normalizePastorType(entry.pastorType);
   document.getElementById('pastor-notes').value = entry.notes || '';
+  document.getElementById('pastor-included').checked = entry.hidden !== true;
   document.getElementById('group-add-all').style.display = 'none';
+  document.getElementById('group-pastor-visibility').style.display = 'block';
 
   pastorModal.classList.add('show');
 };
@@ -1207,96 +1233,82 @@ window.editPastor = function(entryId) {
 function openPastorModal() {
   document.getElementById('modal-pastor-title').textContent = 'Add Pastor / Missionary';
   document.getElementById('pastor-form').reset();
+  delete pastorModal.dataset.editQuarterId;
   document.getElementById('pastor-entry-id').value = '';
-  document.getElementById('pastor-number').value = (state.currentQuarter?.entries?.length || 0) + 1;
+  const maxNumber = (state.currentQuarter?.entries || []).reduce((max, e) => Math.max(max, Number(e.number) || 0), 0);
+  document.getElementById('pastor-number').value = maxNumber + 1;
   document.getElementById('pastor-type').value = 'Unassigned';
+  document.getElementById('pastor-included').checked = true;
   document.getElementById('group-add-all').style.display = 'block';
+  document.getElementById('group-pastor-visibility').style.display = 'none';
 
   pastorModal.classList.add('show');
 }
 
 function closePastorModal() {
   pastorModal.classList.remove('show');
+  delete pastorModal.dataset.editQuarterId;
 }
 
 async function handlePastorSubmit(e) {
   e.preventDefault();
-  if (!state.currentQuarter) return;
 
   const entryId = document.getElementById('pastor-entry-id').value;
+  const editQuarterId = pastorModal.dataset.editQuarterId || state.currentQuarter?.id;
+  if (!editQuarterId) return;
   const name = document.getElementById('pastor-name').value.trim();
   const number = document.getElementById('pastor-number').value;
   const pastorType = document.getElementById('pastor-type').value;
   const notes = document.getElementById('pastor-notes').value.trim();
   const addToAll = document.getElementById('pastor-add-all').checked;
+  const included = document.getElementById('pastor-included').checked;
 
   if (!name) {
     alert('Please enter pastor name');
     return;
   }
 
-  const payload = { name, number, pastorType, notes, addToAllQuarters: addToAll };
+  const payload = { name, number, pastorType, notes, addToAllQuarters: addToAll, included };
 
   try {
     if (entryId) {
       // PUT update
-      const res = await fetch(`/api/quarters/${state.currentQuarter.id}/entries/${entryId}`, {
+      const res = await fetch(`/api/quarters/${editQuarterId}/entries/${entryId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error('Failed to update pastor');
-      const updated = await res.json();
-      updateLastUpdated(new Date().toISOString());
-      const idx = state.currentQuarter.entries.findIndex(x => x.id === entryId);
-      if (idx !== -1) state.currentQuarter.entries[idx] = updated;
-      showToast('Pastor updated successfully!', 'success');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update pastor');
+      updateLastUpdated(data.lastUpdated);
+      if (state.currentQuarter?.id === editQuarterId) {
+        const idx = state.currentQuarter.entries.findIndex(x => x.id === entryId);
+        if (idx !== -1) { if (data.entry.hidden) state.currentQuarter.entries.splice(idx, 1); else state.currentQuarter.entries[idx] = data.entry; }
+      }
+      showToast(data.entry.hidden ? 'Pastor excluded and moved to Hidden Pastors.' : 'Pastor updated successfully!', 'success');
     } else {
       // POST create
+      if (!state.currentQuarter) return;
       const res = await fetch(`/api/quarters/${state.currentQuarter.id}/entries`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error('Failed to create pastor');
-      const created = await res.json();
-      updateLastUpdated(new Date().toISOString());
-      state.currentQuarter.entries.push(created);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create pastor');
+      updateLastUpdated(data.lastUpdated);
+      state.currentQuarter.entries.push(data.entry);
       showToast('Pastor added to list!', 'success');
     }
 
     closePastorModal();
-    renderQuarterStats();
-    renderTable();
+    if (state.currentQuarter?.id === editQuarterId) { renderQuarterStats(); renderTable(); } else if (editQuarterId) { await loadQuarterDetails(editQuarterId); }
   } catch (err) {
     showToast('Operation failed: ' + err.message, 'error');
   }
 }
-
-window.deletePastor = async function(entryId) {
-  if (!state.currentQuarter) return;
-  const entry = state.currentQuarter.entries.find(e => e.id === entryId);
-  if (!entry) return;
-
-  if (!confirm(`Are you sure you want to remove "${entry.name}" from ${state.currentQuarter.title}?`)) return;
-
-  try {
-    const res = await fetch(`/api/quarters/${state.currentQuarter.id}/entries/${entryId}`, {
-      method: 'DELETE'
-    });
-    if (!res.ok) throw new Error('Failed to delete pastor');
-    
-    // Remove locally and renumber
-    state.currentQuarter.entries = state.currentQuarter.entries.filter(e => e.id !== entryId);
-    state.currentQuarter.entries.forEach((e, i) => { e.number = i + 1; });
-
-    showToast('Pastor moved to Recycle Bin', 'success');
-    renderQuarterStats();
-    renderTable();
-  } catch (err) {
-    showToast('Delete failed: ' + err.message, 'error');
-  }
-};
 
 // --- Quarter Modal & Creation ---
 function openQuarterModal() {
@@ -1438,59 +1450,224 @@ function exitReportMode() {
   if (latest) { state.activeYear = latest.year; populateQuarterDropdown(); quarterSelect.value = latest.id; loadQuarterDetails(latest.id); }
 }
 
-// --- Recycle Bin ---
-async function openRecycleBinModal() {
-  recycleBinModal.classList.add('show');
-  const list = document.getElementById('recycle-list');
-  list.innerHTML = '<div class="audit-empty">Loading deleted records...</div>';
-  try {
-    const res = await fetch('/api/recycle-bin');
-    if (!res.ok) throw new Error('Failed to load Recycle Bin');
-    const data = await res.json();
-    renderRecycleBin(data.recycleBin || []);
-  } catch (err) {
-    list.innerHTML = `<div class="audit-empty">${escapeHtml(err.message)}</div>`;
-  }
+
+// --- Hidden Pastors ---
+async function openHiddenPastorsModal() {
+  if (!hiddenPastorsModal || !['admin','staff'].includes(currentUser?.role)) return;
+  hiddenPastorsModal.classList.add('show');
+  await loadHiddenPastors();
 }
 
-function closeRecycleBinModal() { recycleBinModal.classList.remove('show'); }
-
-function renderRecycleBin(items) {
-  const list = document.getElementById('recycle-list');
-  if (!items.length) { list.innerHTML = '<div class="audit-empty">Recycle Bin is empty.</div>'; return; }
-  list.innerHTML = items.map(item => {
-    const when = item.deletedAt ? new Date(item.deletedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown date';
-    return `<div class="recycle-item">
-      <div class="recycle-main"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.deletedFromQuarterTitle || item.deletedFromQuarterId || 'Unknown quarter')} • ${escapeHtml(normalizePastorType(item.pastorType))}</span><small>Deleted ${escapeHtml(when)}</small></div>
-      <div class="recycle-actions"><button class="btn btn-sm btn-secondary" onclick="restorePastor('${escapeHtml(item.id)}')"><i class="fa-solid fa-rotate-left"></i> Restore</button><button class="btn btn-sm btn-danger" onclick="permanentlyDeletePastor('${escapeHtml(item.id)}')"><i class="fa-solid fa-trash"></i></button></div>
-    </div>`;
-  }).join('');
+async function loadHiddenPastors() {
+  const list = document.getElementById('hidden-pastors-list');
+  if (!list) return;
+  list.innerHTML = '<div class="audit-empty">Loading hidden pastors...</div>';
+  try {
+    const res = await fetch('/api/hidden-pastors');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to load hidden pastors');
+    const items = data.hidden || [];
+    const count = document.getElementById('hidden-pastor-count');
+    if (count) count.textContent = items.length;
+    if (!items.length) { list.innerHTML = '<div class="audit-empty">No hidden pastors.</div>'; return; }
+    list.innerHTML = items.map(item => `
+      <div class="hidden-pastor-row">
+        <div class="hidden-pastor-main">
+          <strong>${escapeHtml(item.number ? `${item.number}. ${item.name}` : item.name)}</strong>
+          <small>${escapeHtml(item.quarterTitle || item.quarterId)} • ${escapeHtml(normalizePastorType(item.pastorType))}</small>
+        </div>
+        <div class="hidden-pastor-actions">
+          <button class="btn btn-sm btn-outline" onclick="editHiddenPastor('${escapeHtml(item.quarterId)}','${escapeHtml(item.id)}')"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
+          <button class="btn btn-sm btn-primary" onclick="restoreHiddenPastor('${escapeHtml(item.quarterId)}','${escapeHtml(item.id)}')"><i class="fa-solid fa-eye"></i> Include</button>
+        </div>
+      </div>`).join('');
+  } catch (err) { list.innerHTML = `<div class="audit-empty">${escapeHtml(err.message)}</div>`; }
 }
 
-window.restorePastor = async function(entryId) {
-  if (!confirm('Restore this pastor to the original quarter with all previous support data?')) return;
-  try {
-    const res = await fetch(`/api/recycle-bin/${encodeURIComponent(entryId)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to restore pastor');
-    showToast(`${data.restored.name} restored successfully.`, 'success');
-    await openRecycleBinModal();
-    await loadQuartersList();
-    const target = state.quarters.find(q => q.id === data.quarterId);
-    if (target) { state.activeYear = target.year; state.allMode = false; state.reportMode = false; toggleAllView(false); updateReportModeUi(); quarterSelect.value = target.id; await loadQuarterDetails(target.id); }
-  } catch (err) { showToast('Restore failed: ' + err.message, 'error'); }
-};
+function closeHiddenPastorsModal() { hiddenPastorsModal?.classList.remove('show'); }
 
-window.permanentlyDeletePastor = async function(entryId) {
-  if (!confirm('Permanently delete this pastor from the Recycle Bin? This cannot be undone.')) return;
+async function editHiddenPastor(quarterId, entryId) {
   try {
-    const res = await fetch(`/api/recycle-bin/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+    const res = await fetch(`/api/quarters/${encodeURIComponent(quarterId)}/hidden`);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to permanently delete pastor');
-    showToast('Pastor permanently deleted.', 'success');
-    await openRecycleBinModal();
-  } catch (err) { showToast('Permanent delete failed: ' + err.message, 'error'); }
-};
+    if (!res.ok) throw new Error(data.error || 'Unable to load hidden pastor');
+    const entry = (data.quarter?.entries || []).find(e => e.id === entryId);
+    if (!entry) throw new Error('Hidden pastor not found.');
+    document.getElementById('modal-pastor-title').textContent = 'Edit Pastor / Missionary';
+    document.getElementById('pastor-entry-id').value = entry.id;
+    document.getElementById('pastor-number').value = entry.number || '';
+    document.getElementById('pastor-name').value = entry.name || '';
+    document.getElementById('pastor-type').value = normalizePastorType(entry.pastorType);
+    document.getElementById('pastor-notes').value = entry.notes || '';
+    document.getElementById('pastor-included').checked = false;
+    document.getElementById('group-add-all').style.display = 'none';
+    document.getElementById('group-pastor-visibility').style.display = 'block';
+    pastorModal.dataset.editQuarterId = quarterId;
+    closeHiddenPastorsModal();
+    pastorModal.classList.add('show');
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function restoreHiddenPastor(quarterId, entryId) {
+  try {
+    const res = await fetch(`/api/quarters/${encodeURIComponent(quarterId)}/entries/${encodeURIComponent(entryId)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ included: true })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to include pastor');
+    updateLastUpdated(data.lastUpdated);
+    showToast(`${data.entry.name} is included again.`, 'success');
+    await loadHiddenPastors();
+    if (state.currentQuarter?.id === quarterId) await loadQuarterDetails(quarterId);
+  } catch (err) { showToast('Include failed: ' + err.message, 'error'); }
+}
+
+// --- Reminder / Notification Center ---
+let notificationRecipients = [];
+let notificationSettings = null;
+
+async function openNotificationsModal() {
+  if (!notificationsModal || !['admin','staff'].includes(currentUser?.role)) return;
+  notificationsModal.classList.add('show');
+  await loadNotificationState();
+  await loadNotificationRecipients();
+}
+
+function closeNotificationsModal() { notificationsModal?.classList.remove('show'); }
+
+async function loadNotificationState() {
+  try {
+    const res = await fetch('/api/notifications/state');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to load notification settings');
+    notificationSettings = data.settings;
+    populateNotificationSettings(data.settings);
+    renderNotificationHistory(data.log || []);
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function populateNotificationSettings(settings) {
+  if (!settings) return;
+  const ids = {
+    'monthly-enabled': settings.monthly.enabled,
+    'monthly-days': settings.monthly.daysBefore,
+    'monthly-subject': settings.monthly.subject,
+    'monthly-email': settings.monthly.emailMessage,
+    'monthly-sms': settings.monthly.smsMessage,
+    'quarterly-enabled': settings.quarterly.enabled,
+    'quarterly-days': settings.quarterly.daysBefore,
+    'quarterly-subject': settings.quarterly.subject,
+    'quarterly-email': settings.quarterly.emailMessage,
+    'quarterly-sms': settings.quarterly.smsMessage,
+    'channel-email': settings.channels.email,
+    'channel-sms': settings.channels.sms,
+    'notification-email': settings.channels.email,
+    'notification-sms': settings.channels.sms
+  };
+  Object.entries(ids).forEach(([id,val]) => { const el=document.getElementById(id); if(!el)return; if(el.type==='checkbox')el.checked=Boolean(val); else el.value=val ?? ''; });
+}
+
+async function loadNotificationRecipients() {
+  const kind = document.getElementById('notification-kind')?.value || 'monthly';
+  const list = document.getElementById('notification-recipient-list');
+  if (!list) return;
+  list.innerHTML = '<div class="audit-empty">Loading recipients...</div>';
+  try {
+    const res = await fetch(`/api/notifications/recipients?kind=${encodeURIComponent(kind)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to load recipients');
+    notificationRecipients = data.users || [];
+    const dueCount = notificationRecipients.filter(u => u.due).length;
+    const badge = document.getElementById('notification-badge');
+    if (badge) { badge.textContent = dueCount > 99 ? '99+' : String(dueCount); badge.style.display = dueCount ? 'inline-flex' : 'none'; }
+    renderNotificationRecipients();
+  } catch (err) { list.innerHTML = `<div class="audit-empty">${escapeHtml(err.message)}</div>`; }
+}
+
+function selectedRecipientIds() {
+  return [...document.querySelectorAll('#notification-recipient-list input[type="checkbox"]:checked')].map(x => x.value);
+}
+
+function renderNotificationRecipients() {
+  const list = document.getElementById('notification-recipient-list');
+  if (!list) return;
+  if (!notificationRecipients.length) { list.innerHTML = '<div class="audit-empty">No active accounts found.</div>'; return; }
+  list.innerHTML = notificationRecipients.map(u => `
+    <label class="notification-recipient">
+      <input type="checkbox" value="${escapeHtml(u.id)}" ${u.due ? 'checked' : ''}>
+      <span class="notification-recipient-main"><strong>${escapeHtml(u.name)}</strong><small>${escapeHtml(u.email || 'No email')} • ${escapeHtml(u.phone || 'No phone')}</small></span>
+      <span class="notification-recipient-meta ${u.due ? 'due' : ''}">${u.due ? `Due: ${escapeHtml((u.pastors || []).join(', '))}` : 'No pending support'}</span>
+    </label>`).join('');
+  updateNotificationRecipientMode();
+}
+
+function updateNotificationRecipientMode() {
+  const mode = document.querySelector('input[name="recipient-mode"]:checked')?.value || 'month';
+  const list = document.getElementById('notification-recipient-list');
+  if (list) list.style.opacity = mode === 'selected' ? '1' : '.65';
+  const summary = document.getElementById('notification-send-summary');
+  if (summary) summary.textContent = mode === 'month' ? 'Send to all supporters with pending support for the current month.' : mode === 'quarter' ? 'Send to all supporters with pending support for the current quarter.' : `${selectedRecipientIds().length} selected account(s).`;
+}
+
+async function sendNotificationsNow() {
+  const kind = document.getElementById('notification-kind')?.value || 'monthly';
+  const mode = document.querySelector('input[name="recipient-mode"]:checked')?.value || 'month';
+  const channels = { email: document.getElementById('notification-email')?.checked !== false, sms: document.getElementById('notification-sms')?.checked !== false };
+  const userIds = mode === 'selected' ? selectedRecipientIds() : [];
+  if (mode === 'selected' && !userIds.length) return showToast('Select at least one recipient.', 'error');
+  if (!channels.email && !channels.sms) return showToast('Select at least one channel.', 'error');
+  const btn = document.getElementById('btn-send-notification');
+  try {
+    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
+    const res = await fetch('/api/notifications/send', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, recipientMode: mode, userIds, channels }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Notification sending failed');
+    showToast(`Reminder complete: ${data.sent} sent, ${data.skipped} skipped, ${data.failed} failed.`, data.failed ? 'info' : 'success');
+    await loadNotificationState(); await loadNotificationRecipients();
+  } catch (err) { showToast(err.message, 'error'); }
+  finally { btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-paper-plane"></i> Send Now'; }
+}
+
+async function saveNotificationSettings() {
+  if (currentUser?.role !== 'admin') return showToast('Only Admin can change reminder settings.', 'error');
+  const payload = {
+    monthly: { enabled: document.getElementById('monthly-enabled').checked, daysBefore: document.getElementById('monthly-days').value, subject: document.getElementById('monthly-subject').value, emailMessage: document.getElementById('monthly-email').value, smsMessage: document.getElementById('monthly-sms').value },
+    quarterly: { enabled: document.getElementById('quarterly-enabled').checked, daysBefore: document.getElementById('quarterly-days').value, subject: document.getElementById('quarterly-subject').value, emailMessage: document.getElementById('quarterly-email').value, smsMessage: document.getElementById('quarterly-sms').value },
+    channels: { email: document.getElementById('channel-email').checked, sms: document.getElementById('channel-sms').checked }
+  };
+  try {
+    const res = await fetch('/api/notifications/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to save reminder settings');
+    notificationSettings=data.settings; populateNotificationSettings(data.settings); showToast('Reminder settings saved.', 'success');
+  } catch(err) { showToast(err.message,'error'); }
+}
+
+function renderNotificationHistory(log) {
+  const list=document.getElementById('notification-history-list'); if(!list)return;
+  if(!log.length){list.innerHTML='<div class="audit-empty">No reminder messages have been sent yet.</div>';return;}
+  list.innerHTML=log.map(item=>`<div class="notification-history-row"><strong>${escapeHtml(item.userName||'Account')}</strong><span>${escapeHtml(item.kind)} • ${escapeHtml(item.period)}</span><span>${escapeHtml(item.channel)}</span><span class="notification-status-${escapeHtml(item.status)}">${escapeHtml(item.status)}</span><small>${escapeHtml(item.sentAt ? new Date(item.sentAt).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}) : '')}${item.error ? `<br>${escapeHtml(item.error)}` : ''}</small></div>`).join('');
+}
+
+function setupNotificationUi() {
+  document.getElementById('modal-hidden-pastors-close')?.addEventListener('click', closeHiddenPastorsModal);
+  document.getElementById('modal-notifications-close')?.addEventListener('click', closeNotificationsModal);
+  document.querySelectorAll('.notification-tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.notification-tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.notification-panel').forEach(x=>x.classList.remove('active'));
+    tab.classList.add('active'); document.getElementById(`notification-panel-${tab.dataset.tab}`)?.classList.add('active');
+  }));
+  document.getElementById('notification-kind')?.addEventListener('change', loadNotificationRecipients);
+  document.querySelectorAll('input[name="recipient-mode"]').forEach(r => r.addEventListener('change', updateNotificationRecipientMode));
+  document.getElementById('notification-select-all')?.addEventListener('click', () => { document.querySelectorAll('#notification-recipient-list input[type="checkbox"]').forEach(x=>x.checked=true); updateNotificationRecipientMode(); });
+  document.getElementById('notification-clear-all')?.addEventListener('click', () => { document.querySelectorAll('#notification-recipient-list input[type="checkbox"]').forEach(x=>x.checked=false); updateNotificationRecipientMode(); });
+  document.getElementById('btn-send-notification')?.addEventListener('click', sendNotificationsNow);
+  document.getElementById('btn-save-notification-settings')?.addEventListener('click', saveNotificationSettings);
+  document.querySelector('#notifications-modal .modal-backdrop')?.addEventListener('click', closeNotificationsModal);
+  document.querySelector('#hidden-pastors-modal .modal-backdrop')?.addEventListener('click', closeHiddenPastorsModal);
+}
+
+setupNotificationUi();
 
 // --- Live Presentation Slides Mode ---
 async function openPresentationMode() {

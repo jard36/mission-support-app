@@ -50,6 +50,9 @@
         <button id="btn-download-pptx" class="btn btn-primary">
           <i class="fa-solid fa-file-powerpoint"></i> Download PPT
         </button>
+        <button id="btn-notification-bell" class="btn btn-outline notification-bell" title="Reminders & Notifications" aria-label="Reminders & Notifications">
+          <i class="fa-regular fa-bell"></i><span id="notification-badge" class="notification-badge" style="display:none;">0</span>
+        </button>
         <div class="header-user" id="header-user" style="display:none">
           <span class="header-user-role" id="header-user-role">ADMIN</span>
           <span class="header-user-name" id="header-user-name">—</span>
@@ -64,7 +67,8 @@
             <a href="#" id="action-add-quarter"><i class="fa-solid fa-calendar-plus"></i> Add New Quarter</a>
             <a href="#" id="action-user-management"><i class="fa-solid fa-users-gear"></i> User Management</a>
             <a href="#" id="action-audit-trail"><i class="fa-solid fa-clock-rotate-left"></i> Audit Trail</a>
-            <a href="#" id="action-recycle-bin"><i class="fa-solid fa-trash-can-arrow-up"></i> Recycle Bin</a>
+            <a href="#" id="action-hidden-pastors"><i class="fa-solid fa-eye-slash"></i> Hidden Pastors</a>
+            <a href="#" id="action-notifications"><i class="fa-regular fa-bell"></i> Reminders & Notifications</a>
             <div class="divider"></div>
             <a href="#" id="action-logout"><i class="fa-solid fa-right-from-bracket"></i> Sign Out</a>
             <a href="#" id="action-reset-data" class="text-danger"><i class="fa-solid fa-rotate-left"></i> Reset to Original PPT Data</a>
@@ -206,6 +210,9 @@
           <button id="btn-exit-report" class="btn btn-outline btn-sm" style="display:none;">
             <i class="fa-solid fa-xmark"></i> Exit Report
           </button>
+          <button id="btn-hidden-pastors" class="btn btn-outline btn-sm" style="display:none;">
+            <i class="fa-solid fa-eye-slash"></i> Hidden Pastors <span id="hidden-pastor-count" class="count-badge small">0</span>
+          </button>
           <button id="btn-add-pastor" class="btn btn-primary btn-sm">
             <i class="fa-solid fa-user-plus"></i> Add Pastor
           </button>
@@ -265,7 +272,6 @@
               <th style="width: 140px; text-align: center;" id="th-month-2">Month 2</th>
               <th style="width: 140px; text-align: center;" id="th-month-3">Month 3</th>
               <th style="width: 120px; text-align: center;">Status</th>
-              <th style="width: 110px; text-align: center;">Actions</th>
             </tr>
           </thead>
           <tbody id="pastors-tbody">
@@ -297,7 +303,10 @@
           <div class="form-group"><label>Username <span class="required">*</span></label><input name="username" class="form-input" autocomplete="username" required></div><div class="form-group" id="signup-role-group" style="display:none"><label>Account Type</label><select name="role" id="signup-role" class="form-select"><option value="supporter">Supporter / Viewer</option><option value="staff">Staff</option></select></div>
           <div class="form-row"><div class="form-group col"><label>Email</label><input name="email" type="email" class="form-input" autocomplete="email"></div><div class="form-group col"><label>Phone Number</label><input name="phone" type="tel" class="form-input" autocomplete="tel"></div></div>
           <small class="form-hint">Provide at least an email address or phone number.</small>
-          <div class="form-row"><div class="form-group col"><label>Password <span class="required">*</span></label><input name="password" type="password" minlength="8" class="form-input" autocomplete="new-password" required></div><div class="form-group col"><label>Confirm Password <span class="required">*</span></label><input name="confirmPassword" type="password" minlength="8" class="form-input" autocomplete="new-password" required></div></div>
+          <div class="form-row">
+            <div class="form-group col"><label>Password <span class="required">*</span></label><div class="password-field-wrap"><input id="signup-password" name="password" type="password" minlength="8" class="form-input" autocomplete="new-password" required><button type="button" class="password-toggle form-password-toggle" id="toggle-signup-password" aria-label="Show password" title="Show password"><i class="fa-solid fa-eye"></i></button></div></div>
+            <div class="form-group col"><label>Confirm Password <span class="required">*</span></label><div class="password-field-wrap"><input id="signup-confirm-password" name="confirmPassword" type="password" minlength="8" class="form-input" autocomplete="new-password" required><button type="button" class="password-toggle form-password-toggle" id="toggle-signup-confirm-password" aria-label="Show password" title="Show password"><i class="fa-solid fa-eye"></i></button></div></div>
+          </div>
           <div id="signup-error" class="login-error" style="display:none"></div>
           <div class="modal-footer"><button type="button" class="btn btn-outline" id="btn-signup-cancel">Cancel</button><button type="submit" class="btn btn-primary" id="btn-signup-submit">Create Account</button></div>
         </form>
@@ -331,6 +340,9 @@
               <option value="Local">Local</option>
               <option value="Foreign">Foreign</option>
             </select>
+          </div>
+          <div class="form-group checkbox-group" id="group-pastor-visibility" style="display:none;">
+            <label class="toggle-row"><input type="checkbox" id="pastor-included" checked><span><strong>Include Pastor</strong><small>When unchecked, the pastor is hidden from active lists, reports, and PowerPoint exports but remains saved in the database.</small></span></label>
           </div>
           <div class="form-group">
             <label for="pastor-notes">Notes / Remarks</label>
@@ -441,19 +453,58 @@
     </div>
   </div>
 
-  <!-- Recycle Bin Modal -->
-  <div class="modal" id="recycle-bin-modal">
+  <!-- Hidden Pastors Modal -->
+  <div class="modal" id="hidden-pastors-modal">
     <div class="modal-backdrop"></div>
-    <div class="modal-content recycle-modal-content">
+    <div class="modal-content hidden-pastors-modal-content">
       <div class="modal-header">
-        <div>
-          <h3>Recycle Bin</h3>
-          <p class="modal-subtitle">Deleted pastors stay here until you restore or permanently delete them.</p>
-        </div>
-        <button class="modal-close" id="modal-recycle-close">&times;</button>
+        <div><h3>Hidden Pastors</h3><p class="modal-subtitle">Excluded pastors remain saved with their support history and can be included again anytime.</p></div>
+        <button class="modal-close" id="modal-hidden-pastors-close">&times;</button>
       </div>
-      <div class="modal-body">
-        <div class="recycle-list" id="recycle-list"><div class="audit-empty">Loading deleted records...</div></div>
+      <div class="modal-body"><div class="hidden-pastors-list" id="hidden-pastors-list"><div class="audit-empty">Loading hidden pastors...</div></div></div>
+    </div>
+  </div>
+
+  <!-- Reminders & Notifications Modal -->
+  <div class="modal" id="notifications-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content notifications-modal-content">
+      <div class="modal-header">
+        <div><h3>Reminders & Notifications</h3><p class="modal-subtitle">Send and configure monthly or quarterly mission support reminders through Email and SMS.</p></div>
+        <button class="modal-close" id="modal-notifications-close">&times;</button>
+      </div>
+      <div class="modal-body notifications-body">
+        <div class="notification-tabs">
+          <button class="notification-tab active" data-tab="send">Send Reminder</button>
+          <button class="notification-tab" data-tab="settings">Settings</button>
+          <button class="notification-tab" data-tab="history">Sent History</button>
+        </div>
+        <section class="notification-panel active" id="notification-panel-send">
+          <div class="notification-grid">
+            <div class="form-group"><label for="notification-kind">Reminder Type</label><select id="notification-kind" class="form-select"><option value="monthly">Monthly Reminder</option><option value="quarterly">Quarterly Reminder</option></select></div>
+            <div class="form-group"><label>Channels</label><div class="notification-checks"><label><input type="checkbox" id="notification-email" checked> Email</label><label><input type="checkbox" id="notification-sms" checked> SMS</label></div></div>
+          </div>
+          <div class="notification-recipient-mode">
+            <label><input type="radio" name="recipient-mode" value="month" checked><span><strong>All due for this month</strong><small>Active supporters whose assigned pastor records still need this month's support.</small></span></label>
+            <label><input type="radio" name="recipient-mode" value="quarter"><span><strong>All due for this quarter</strong><small>Active supporters with pending support in the current quarter.</small></span></label>
+            <label><input type="radio" name="recipient-mode" value="selected"><span><strong>Selected accounts</strong><small>Choose individual recipients below.</small></span></label>
+          </div>
+          <div class="notification-recipient-toolbar"><strong>Recipients</strong><button type="button" class="btn btn-sm btn-outline" id="notification-select-all">Select All</button><button type="button" class="btn btn-sm btn-ghost" id="notification-clear-all">Clear</button></div>
+          <div id="notification-recipient-list" class="notification-recipient-list"></div>
+          <div id="notification-send-summary" class="notification-summary"></div>
+          <div class="modal-footer"><button type="button" class="btn btn-primary" id="btn-send-notification"><i class="fa-solid fa-paper-plane"></i> Send Now</button></div>
+        </section>
+        <section class="notification-panel" id="notification-panel-settings">
+          <div class="notification-settings-note"><i class="fa-solid fa-circle-info"></i> Admin controls the automatic reminder timing and message templates. Automatic checks run daily; the default reminder is 5 days before the period ends.</div>
+          <div class="notification-grid">
+            <div class="notification-setting-card"><h4>Monthly Reminder</h4><label><input type="checkbox" id="monthly-enabled"> Enable automatic monthly reminder</label><label>Days before month-end <input type="number" min="0" max="30" id="monthly-days" class="form-input"></label><label>Subject <input id="monthly-subject" class="form-input"></label><label>Email message <textarea id="monthly-email" class="form-input notification-textarea"></textarea></label><label>SMS message <textarea id="monthly-sms" class="form-input notification-textarea small"></textarea></label></div>
+            <div class="notification-setting-card"><h4>Quarterly Reminder</h4><label><input type="checkbox" id="quarterly-enabled"> Enable automatic quarterly reminder</label><label>Days before quarter-end <input type="number" min="0" max="30" id="quarterly-days" class="form-input"></label><label>Subject <input id="quarterly-subject" class="form-input"></label><label>Email message <textarea id="quarterly-email" class="form-input notification-textarea"></textarea></label><label>SMS message <textarea id="quarterly-sms" class="form-input notification-textarea small"></textarea></label></div>
+          </div>
+          <div class="notification-channel-settings"><strong>Available Channels</strong><label><input type="checkbox" id="channel-email"> Email (Resend)</label><label><input type="checkbox" id="channel-sms"> SMS (IPROG)</label></div>
+          <p class="form-hint">Template placeholders: <code>{{name}}</code>, <code>{{month}}</code>, <code>{{quarter}}</code>, <code>{{deadline}}</code>, <code>{{pastors}}</code>, <code>{{year}}</code>.</p>
+          <div class="modal-footer"><button type="button" class="btn btn-primary" id="btn-save-notification-settings"><i class="fa-solid fa-floppy-disk"></i> Save Reminder Settings</button></div>
+        </section>
+        <section class="notification-panel" id="notification-panel-history"><div id="notification-history-list" class="notification-history-list"><div class="audit-empty">Loading notification history...</div></div></section>
       </div>
     </div>
   </div>

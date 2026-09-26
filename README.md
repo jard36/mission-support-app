@@ -8,7 +8,7 @@ Usa ka moderno ug sayon gamiton nga CRUD Web Application para sa pagdumala sa Mi
    - **Create**: Pagdugang og bag-ong Pastor/Missionary o paghimo og bag-ong Quarter.
    - **Read**: Live search, filter by Year & Quarter, statistics ug support completion percentage.
    - **Update**: 1-click monthly status toggling (check/uncheck), bulk updates, ug edit details.
-   - **Delete**: Pagtangtang og record nga naay confirmation.
+   - **Hide / Restore**: Pastor records are never permanently deleted; excluded pastors remain in the database and can be restored from Hidden Pastors.
 3. **Downloadable PowerPoint (.pptx)**:
    - I-click lang ang " Download PPT\ aron makakuha og bag-ong .pptx file nga gi-format tag-3 ka pastor matag slide aron dako ug klaro para sa church projector!
 4. **Live Projector Mode**:
@@ -31,7 +31,11 @@ Usa ka moderno ug sayon gamiton nga CRUD Web Application para sa pagdumala sa Mi
 - Mission Report Builder: select multiple quarters, choose pastor type and status, view the selected report in the browser, or download one combined PPTX.
 - Incomplete-only reporting filters completed pastors from older/completed quarters. The latest/current quarter is always shown in full so the report can show both complete and incomplete pastors.
 - The All year filter is functional and displays every available quarter; the same selection can be presented or downloaded.
-- Deleted pastors now go to a Recycle Bin. Restore returns the full record and support history to its original quarter/order; permanent deletion requires confirmation.
+- Pastor Include/Exclude: excluded pastors remain in the database and are omitted from active lists, reports, and PowerPoint exports. Hidden Pastors can be restored anytime.
+- Reminders & Notifications: Admin/Staff can send monthly or quarterly reminders through Resend Email and IPROG SMS, with recipient selection, editable templates, duplicate-send tracking, and scheduled reminder checks.
+- Export Backup (.json) and Reset to Original PPT Data are Admin-only.
+- Supporter account password and confirmation fields include show/hide eye controls.
+- Last updated changes only after actual mission-support record changes; login, viewing, and refreshes do not change it.
 
 ## Login / Authentication
 

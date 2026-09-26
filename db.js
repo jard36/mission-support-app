@@ -32,8 +32,8 @@ function readJsonDB() {
   return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
 }
 
-function writeJsonDB(data) {
-  data.lastUpdated = new Date().toISOString();
+function writeJsonDB(data, { touchLastUpdated = false } = {}) {
+  if (touchLastUpdated) data.lastUpdated = new Date().toISOString();
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
@@ -78,11 +78,11 @@ async function readDB() {
   return rows[0].data;
 }
 
-async function writeDB(data) {
-  data.lastUpdated = new Date().toISOString();
+async function writeDB(data, { touchLastUpdated = false } = {}) {
+  if (touchLastUpdated) data.lastUpdated = new Date().toISOString();
   const database = await ensureNeon();
   if (!database) {
-    writeJsonDB(data);
+    writeJsonDB(data, { touchLastUpdated });
     return data;
   }
   await database`
