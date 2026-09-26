@@ -1869,6 +1869,25 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   .btn { max-width:100%; }
 }
 
-/* Supporter account menu: only Sign Out is exposed. */
-body.supporter-mode #dropdown-menu #action-logout { display:flex !important; }
-body.supporter-mode #dropdown-menu .divider { display:none !important; }
+
+/* Direct logout control for supporter accounts */
+.supporter-logout-btn {
+  border-color: rgba(248, 113, 113, .55);
+  color: #fca5a5;
+  background: rgba(127, 29, 29, .12);
+  min-height: 42px;
+}
+.supporter-logout-btn:hover {
+  border-color: #f87171;
+  color: #fff;
+  background: rgba(127, 29, 29, .28);
+}
+@media (max-width: 720px) {
+  .supporter-logout-btn { width: auto; min-width: 42px; padding: 0 .8rem; }
+  .supporter-logout-btn span { display: inline; }
+}
+@media (max-width: 480px) {
+  .supporter-logout-btn { min-width: 38px; width: 38px; padding: 0; }
+  .supporter-logout-btn span { display: none; }
+}
+

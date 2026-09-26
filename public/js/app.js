@@ -100,6 +100,10 @@ function setupAuthListeners() {
     e.preventDefault();
     await signOut();
   });
+  const supporterLogout = document.getElementById('btn-supporter-logout');
+  if (supporterLogout) supporterLogout.addEventListener('click', async () => {
+    await signOut();
+  });
 }
 
 function setupPasswordToggle(buttonId, inputId) {
@@ -229,10 +233,11 @@ function applyRoleUi() {
   });
   const toolbarTitle = document.getElementById('table-header-title');
   if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastors';
-  // Supporters still need an account menu so they can safely sign out.
-  // For supporters, show only the Sign Out action; all operational/admin actions remain hidden.
+  // Supporters get a direct Sign Out button in the header. They do not need the three-dot menu.
   const moreOptions = document.getElementById('btn-more-options');
-  if (moreOptions) moreOptions.style.display = '';
+  if (moreOptions) moreOptions.style.display = supporter ? 'none' : '';
+  const supporterLogout = document.getElementById('btn-supporter-logout');
+  if (supporterLogout) supporterLogout.style.display = supporter ? 'inline-flex' : 'none';
   const supporterMenuIds = [
     'action-download-all','action-backup-json','action-add-quarter','action-user-management',
     'action-audit-trail','action-hidden-pastors','action-notifications','action-reset-data'
