@@ -341,8 +341,17 @@
               <option value="Foreign">Foreign</option>
             </select>
           </div>
-          <div class="form-group checkbox-group" id="group-pastor-visibility" style="display:none;">
-            <label class="toggle-row"><input type="checkbox" id="pastor-included" checked><span><strong>Include Pastor</strong><small>When unchecked, the pastor is hidden from active lists, reports, and PowerPoint exports but remains saved in the database.</small></span></label>
+          <div class="form-group" id="group-pastor-visibility" style="display:none;">
+            <label class="pastor-visibility-toggle" for="pastor-included">
+              <span class="pastor-toggle-control" aria-hidden="true">
+                <input type="checkbox" id="pastor-included" checked>
+                <span class="pastor-toggle-slider"></span>
+              </span>
+              <span class="pastor-toggle-copy">
+                <strong>Include Pastor</strong>
+                <small>When turned off, the pastor is hidden from active lists, reports, and PowerPoint exports but remains saved in the database.</small>
+              </span>
+            </label>
           </div>
           <div class="form-group">
             <label for="pastor-notes">Notes / Remarks</label>
