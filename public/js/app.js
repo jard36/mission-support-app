@@ -556,11 +556,28 @@ function renderUserManagement(){
     const canDelete=isAdmin && u.role!=='admin';
     const initials=(u.name||u.username||'U').split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase();
     const roleLabel=String(u.role||'user').toUpperCase();
-    const statusLabel=String(u.status||'unknown').replace(/_/g,' ');
+    const isDisabled=u.status==='disabled';
+    const isPending=u.status==='pending_assignment';
+    const statusLabel=isDisabled?'disabled':(isPending?'pending assignment':'active');
     const assignmentText=assigned.length===0?'No pastor assigned':assigned.length===1?`Assigned: ${escapeHtml(assigned[0].name)}`:`Assigned (${assigned.length}): ${assigned.map(p=>escapeHtml(p.name)).join(', ')}`;
     const assignmentActions=u.role==='supporter' ? `<button class="btn btn-sm btn-outline" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}` : '';
+    const toggle=isAdmin ? `<div class="account-toggle-row"><span><strong>${isDisabled?'Account Disabled':'Account Enabled'}</strong><small>${isDisabled?'User cannot sign in until re-enabled.':'User can sign in to the system.'}</small></span><button type="button" class="toggle-switch ${isDisabled?'':'is-on'}" aria-pressed="${isDisabled?'false':'true'}" title="${isDisabled?'Enable account':'Disable account'}" onclick="toggleManagedUserStatus('${u.id}')"><span></span></button></div>` : '';
     const adminActions=isAdmin ? `<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')"><i class="fa-solid fa-pen"></i> Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')"><i class="fa-solid fa-key"></i> Reset Password</button>${canDelete?`<button class="btn btn-sm btn-danger-outline" onclick="deleteManagedUser('${u.id}')"><i class="fa-solid fa-trash"></i> Delete</button>`:''}` : '';
-    return `<article class="user-card-v2">\n      <div class="user-card-identity">\n        <div class="user-avatar">${escapeHtml(initials)}</div>\n        <div class="user-identity-copy"><div class="user-name-line"><strong>${escapeHtml(u.name||u.username)}</strong><span class="user-role-badge role-${escapeHtml(u.role)}">${roleLabel}</span></div><div class="user-username">@${escapeHtml(u.username)}</div>\n          <div class="user-contact-list"><span><i class="fa-regular fa-envelope"></i>${escapeHtml(u.email||'No email')}</span><span><i class="fa-solid fa-phone"></i>${escapeHtml(u.phone||'No phone')}</span><span><i class="fa-solid fa-link"></i>${assignmentText}</span></div>\n        </div>\n      </div>\n      <div class="user-card-details">\n        <div class="user-status-card"><span class="status-dot ${escapeHtml(u.status)}"></span><div><strong>${escapeHtml(statusLabel.charAt(0).toUpperCase()+statusLabel.slice(1))} Account</strong><small>${u.status==='active'?'User can log in to the system.':'Account requires attention.'}</small></div></div>\n        <div class="user-detail-chip"><i class="fa-solid fa-users"></i><span><small>Account Type</small><strong>${roleLabel}</strong></span></div>\n        <div class="user-detail-chip"><i class="fa-regular fa-calendar"></i><span><small>Account Status</small><strong>${escapeHtml(statusLabel)}</strong></span></div>\n        <div class="user-card-actions">${assignmentActions}${adminActions}</div>\n      </div>\n    </article>`;
+    return `<article class="user-card-v2 ${isDisabled?'user-card-disabled':''}">
+      <div class="user-card-identity">
+        <div class="user-avatar">${escapeHtml(initials)}</div>
+        <div class="user-identity-copy"><div class="user-name-line"><strong>${escapeHtml(u.name||u.username)}</strong><span class="user-role-badge role-${escapeHtml(u.role)}">${roleLabel}</span></div><div class="user-username">@${escapeHtml(u.username)}</div>
+          <div class="user-contact-list"><span><i class="fa-regular fa-envelope"></i>${escapeHtml(u.email||'No email')}</span><span><i class="fa-solid fa-phone"></i>${escapeHtml(u.phone||'No phone')}</span><span><i class="fa-solid fa-link"></i>${assignmentText}</span></div>
+        </div>
+      </div>
+      <div class="user-card-details">
+        <div class="user-status-card"><span class="status-dot ${escapeHtml(u.status)}"></span><div><strong>${escapeHtml(statusLabel.charAt(0).toUpperCase()+statusLabel.slice(1))} Account</strong><small>${isDisabled?'Account is disabled.':(isPending?'Account requires pastor assignment.':'User can log in to the system.')}</small></div></div>
+        <div class="user-detail-chip"><i class="fa-solid fa-users"></i><span><small>Account Type</small><strong>${roleLabel}</strong></span></div>
+        <div class="user-detail-chip"><i class="fa-regular fa-calendar"></i><span><small>Account Status</small><strong>${escapeHtml(statusLabel)}</strong></span></div>
+        ${toggle}
+        <div class="user-card-actions">${assignmentActions}${adminActions}</div>
+      </div>
+    </article>`;
   }).join('');
 }
 async function getPastorChoices(){
@@ -575,13 +592,15 @@ function ensureAssignmentModal(){
   if(modal) return modal;
   modal=document.createElement('div');
   modal.className='modal'; modal.id='assign-pastor-modal';
-  modal.innerHTML=`<div class="modal-backdrop"></div><div class="modal-content assignment-modal-content"><div class="modal-header"><div><h3>Edit Pastor Assignment</h3><p class="modal-subtitle" id="assign-pastor-subtitle">Select one or more pastors.</p></div><button class="modal-close" id="assign-pastor-close">&times;</button></div><div class="modal-body"><div class="assignment-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input id="assign-pastor-search" class="form-input" placeholder="Search pastor by name or number..."></div><div class="assignment-toolbar"><span id="assign-pastor-count">0 selected</span><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-select-all">Select All</button><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-clear">Clear</button></div><div id="assign-pastor-options" class="assignment-options"></div><div class="form-actions"><button type="button" class="btn btn-outline" id="assign-pastor-cancel">Cancel</button><button type="button" class="btn btn-primary" id="assign-pastor-save"><i class="fa-solid fa-check"></i> Save Assignment</button></div></div></div>`;
+  modal.innerHTML=`<div class="modal-backdrop"></div><div class="modal-content assignment-modal-content"><div class="modal-header"><div class="assignment-title-wrap"><div class="assignment-title-icon"><i class="fa-solid fa-users"></i></div><div><h3>Edit Pastor Assignment</h3><p class="modal-subtitle" id="assign-pastor-subtitle">Assign one or more pastors.</p></div></div><button class="modal-close" id="assign-pastor-close">&times;</button></div><div class="modal-body assignment-modal-body"><div class="assignment-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input id="assign-pastor-search" class="form-input" placeholder="Search pastor by name or number..."></div><div class="assignment-filter-row"><div class="assignment-type-tabs"><button type="button" class="assignment-type-tab active" data-type="All">All Pastors <span id="assign-count-all">0</span></button><button type="button" class="assignment-type-tab" data-type="Local">Local Pastors <span id="assign-count-local">0</span></button><button type="button" class="assignment-type-tab" data-type="Foreign">Foreign Pastors <span id="assign-count-foreign">0</span></button></div><label class="assignment-sort-wrap"><i class="fa-solid fa-arrow-down-a-z"></i><select id="assign-pastor-sort" class="form-select"><option value="name">Sort by Name</option><option value="number">Sort by Number</option></select></label></div><div class="assignment-list-shell"><div class="assignment-list-toolbar"><span id="assign-pastor-count">0 selected</span><div><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-select-all"><i class="fa-solid fa-check-double"></i> Select All</button><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-clear"><i class="fa-solid fa-eraser"></i> Clear</button></div></div><div id="assign-pastor-options" class="assignment-options"></div></div><div class="form-actions assignment-form-actions"><button type="button" class="btn btn-outline" id="assign-pastor-cancel">Cancel</button><button type="button" class="btn btn-primary" id="assign-pastor-save"><i class="fa-solid fa-check"></i> Save Assignment</button></div></div></div>`;
   document.body.appendChild(modal);
   modal.querySelector('#assign-pastor-close').onclick=closeAssignmentModal;
   modal.querySelector('#assign-pastor-cancel').onclick=closeAssignmentModal;
   modal.querySelector('.modal-backdrop').onclick=closeAssignmentModal;
   modal.querySelector('#assign-pastor-search').addEventListener('input',renderAssignmentOptions);
-  modal.querySelector('#assign-pastor-select-all').onclick=()=>{assignmentSelected=new Set(assignmentPastors.map(p=>assignmentKey(p)));renderAssignmentOptions();};
+  modal.querySelector('#assign-pastor-sort').addEventListener('change',renderAssignmentOptions);
+  modal.querySelectorAll('.assignment-type-tab').forEach(btn=>btn.addEventListener('click',()=>{modal.querySelectorAll('.assignment-type-tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');renderAssignmentOptions();}));
+  modal.querySelector('#assign-pastor-select-all').onclick=()=>{const filtered=getFilteredAssignmentPastors();filtered.forEach(p=>assignmentSelected.add(assignmentKey(p)));renderAssignmentOptions();};
   modal.querySelector('#assign-pastor-clear').onclick=()=>{assignmentSelected.clear();renderAssignmentOptions();};
   modal.querySelector('#assign-pastor-save').onclick=saveAssignment;
   return modal;
@@ -590,13 +609,28 @@ let assignmentPastors=[];
 let assignmentSelected=new Set();
 let assignmentUserId=null;
 function assignmentKey(p){return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}`;}
-function renderAssignmentOptions(){
+function getFilteredAssignmentPastors(){
   const modal=ensureAssignmentModal();
   const q=(modal.querySelector('#assign-pastor-search').value||'').trim().toLowerCase();
-  const options=assignmentPastors.filter(p=>`${p.number||''} ${p.name||''}`.toLowerCase().includes(q));
+  const type=modal.querySelector('.assignment-type-tab.active')?.dataset.type || 'All';
+  const sort=modal.querySelector('#assign-pastor-sort')?.value || 'name';
+  let options=assignmentPastors.filter(p=>{
+    const normalized=normalizePastorType(p.pastorType);
+    const hay=`${p.number||''} ${p.name||''}`.toLowerCase();
+    return (type==='All'||normalized===type) && (!q||hay.includes(q));
+  });
+  options.sort((a,b)=>sort==='number' ? Number(a.number||0)-Number(b.number||0) : String(a.name||'').localeCompare(String(b.name||'')) || Number(a.number||0)-Number(b.number||0));
+  return options;
+}
+function renderAssignmentOptions(){
+  const modal=ensureAssignmentModal();
+  const counts={all:assignmentPastors.length,local:0,foreign:0};
+  assignmentPastors.forEach(p=>{const t=normalizePastorType(p.pastorType);if(t==='Local')counts.local++;if(t==='Foreign')counts.foreign++;});
+  ['all','local','foreign'].forEach(k=>{const el=modal.querySelector(`#assign-count-${k}`);if(el)el.textContent=counts[k];});
+  const options=getFilteredAssignmentPastors();
   modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} selected`;
-  modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{const key=assignmentKey(p);return `<label class="assignment-option"><input type="checkbox" value="${escapeHtml(key)}" ${assignmentSelected.has(key)?'checked':''}><span class="assignment-option-number">${escapeHtml(String(p.number||''))}</span><span>${escapeHtml(p.name||'')}</span></label>`;}).join(''):'<div class="audit-empty">No pastors found.</div>';
-  modal.querySelectorAll('#assign-pastor-options input').forEach(input=>input.addEventListener('change',()=>{if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} selected`;}));
+  modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{const key=assignmentKey(p);const type=normalizePastorType(p.pastorType);const meta=type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor');return `<label class="assignment-option ${assignmentSelected.has(key)?'is-selected':''}"><input type="checkbox" value="${escapeHtml(key)}" ${assignmentSelected.has(key)?'checked':''}><span class="assignment-check"><i class="fa-solid fa-check"></i></span><span class="assignment-option-number">${escapeHtml(String(p.number||''))}</span><span class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${meta}</small></span><span class="assignment-type-badge ${type.toLowerCase()}">${type}</span></label>`;}).join(''):'<div class="audit-empty">No pastors found.</div>';
+  modal.querySelectorAll('#assign-pastor-options input').forEach(input=>input.addEventListener('change',()=>{if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);renderAssignmentOptions();}));
 }
 function closeAssignmentModal(){document.getElementById('assign-pastor-modal')?.classList.remove('show');}
 async function assignSupporter(id){
@@ -616,6 +650,19 @@ async function saveAssignment(){
   try{btn.disabled=true;const res=await fetch(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
 }
 async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await fetch(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
+async function toggleManagedUserStatus(id){
+  const user=managedUsers.find(x=>x.id===id); if(!user)return;
+  if(currentUser?.id===id && user.status==='active') return showToast('You cannot disable your own account while signed in.','error');
+  const disabling=user.status==='active';
+  const nextStatus=disabling?'disabled':(user.role==='supporter'?(getUserAssignedPastors(user).length?'active':'pending_assignment'):'active');
+  const label=disabling?'disable':'enable';
+  if(!confirm(`Are you sure you want to ${label} ${user.name||user.username}'s account?`))return;
+  try{
+    const res=await fetch(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:nextStatus})});
+    const data=await res.json(); if(!res.ok)throw new Error(data.error||`Unable to ${label} account.`);
+    showToast(`Account ${disabling?'disabled':'enabled'} successfully.`,'success'); await loadUsers();
+  }catch(err){showToast(err.message,'error');}
+}
 async function editManagedUser(id){
   const u=managedUsers.find(x=>x.id===id); if(!u)return;
   const name=prompt('Full name:',u.name||''); if(name===null)return;

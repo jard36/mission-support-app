@@ -316,13 +316,18 @@ app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
     if (req.body?.name !== undefined) user.name = String(req.body.name).trim();
     if (req.body?.email !== undefined) user.email = String(req.body.email).trim().toLowerCase();
     if (req.body?.phone !== undefined) user.phone = String(req.body.phone).trim();
-    if (req.body?.status && ['active','disabled','pending_assignment'].includes(req.body.status)) user.status = req.body.status;
+    if (req.body?.status && ['active','disabled','pending_assignment'].includes(req.body.status)) {
+      if (req.body.status === 'disabled' && user.id === req.user.id) {
+        return res.status(400).json({ error:'You cannot disable your own account while signed in.' });
+      }
+      user.status = req.body.status;
+    }
     if (req.body?.role && req.user.role === 'admin' && ['staff','supporter'].includes(req.body.role)) user.role = req.body.role;
     if (req.body?.password) {
       if (String(req.body.password).length < 8) return res.status(400).json({ error:'Password must be at least 8 characters.' });
       const credentials = hashPassword(req.body.password); user.passwordSalt=credentials.salt; user.passwordHash=credentials.hash;
     }
-    addAudit(db, req, 'USER_UPDATED', { userId:user.id, username:user.username });
+    addAudit(db, req, req.body?.status ? 'USER_STATUS_CHANGED' : 'USER_UPDATED', { userId:user.id, username:user.username, status:user.status });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });
   } catch (err) { res.status(500).json({ error: err.message }); }
