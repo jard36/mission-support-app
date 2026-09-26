@@ -229,8 +229,22 @@ function applyRoleUi() {
   });
   const toolbarTitle = document.getElementById('table-header-title');
   if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastors';
+  // Supporters still need an account menu so they can safely sign out.
+  // For supporters, show only the Sign Out action; all operational/admin actions remain hidden.
   const moreOptions = document.getElementById('btn-more-options');
-  if (moreOptions) moreOptions.style.display = supporter ? 'none' : '';
+  if (moreOptions) moreOptions.style.display = '';
+  const supporterMenuIds = [
+    'action-download-all','action-backup-json','action-add-quarter','action-user-management',
+    'action-audit-trail','action-hidden-pastors','action-notifications','action-reset-data'
+  ];
+  supporterMenuIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = supporter ? 'none' : '';
+  });
+  const logoutAction = document.getElementById('action-logout');
+  if (logoutAction) logoutAction.style.display = '';
+  const menuDivider = document.querySelector('#dropdown-menu .divider');
+  if (menuDivider) menuDivider.style.display = supporter ? 'none' : '';
 }
 
 function showSupporterPending(show) {
