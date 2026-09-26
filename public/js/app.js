@@ -118,7 +118,7 @@ function setupPasswordToggle(buttonId, inputId) {
 
 async function checkAuthSession() {
   try {
-    const res = await fetch('/api/auth/me');
+    const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
     if (!res.ok) throw new Error('not authenticated');
     const data = await res.json();
     if (!data.authenticated) throw new Error('not authenticated');
@@ -140,6 +140,7 @@ async function handleLogin(e) {
   button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in...';
   try {
     const res = await fetch('/api/auth/login', {
+      credentials: 'same-origin',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -237,14 +238,14 @@ function showSupporterPending(show) {
 
 async function refreshMyAccount() {
   try {
-    const res = await fetch('/api/auth/me');
+    const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
     const data = await res.json();
     if (data.authenticated) enterAuthenticatedApp(data.user);
   } catch (err) { console.error(err); }
 }
 
 async function signOut() {
-  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch (_) {}
   currentUser = null;
   state.pendingChanges = {};
   const badge = document.getElementById('header-user');
@@ -256,9 +257,11 @@ let eventsInitialized = false;
 
 // If a server-side session expires, return to the login screen instead of leaving a blank/erroring app.
 const originalFetch = window.fetch.bind(window);
-window.fetch = async (...args) => {
-  const response = await originalFetch(...args);
-  const input = args[0];
+window.fetch = async (input, init = {}) => {
+  // Explicitly include same-origin cookies. This is normally the browser default,
+  // but making it explicit avoids session loss after Vercel deployments/proxies.
+  const requestInit = { ...init, credentials: init.credentials || 'same-origin' };
+  const response = await originalFetch(input, requestInit);
   const url = typeof input === 'string' ? input : (input?.url || '');
   if (response.status === 401 && !url.includes('/api/auth/')) {
     showLoginScreen();

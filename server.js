@@ -13,6 +13,15 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// API responses are user/session-specific. Prevent Vercel/CDN caching from
+// replaying an unauthenticated response across requests.
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, private, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Vary', 'Cookie, Authorization');
+  next();
+});
+
 // Explicitly serve the main app page. Vercel's current Express support
 // routes the project to this Express server automatically, so no
 // vercel.json routing rules are required.
@@ -81,11 +90,15 @@ function parseCookies(req) {
 }
 
 function setSessionCookie(res, token) {
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  const secure = process.env.NODE_ENV === 'production';
+  const sameSite = secure ? 'None' : 'Lax';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? '; Secure' : ''}`);
 }
 
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  const secure = process.env.NODE_ENV === 'production';
+  const sameSite = secure ? 'None' : 'Lax';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure ? '; Secure' : ''}`);
 }
 
 async function ensureDefaultAdmin() {
