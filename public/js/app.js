@@ -215,16 +215,20 @@ function applyRoleUi() {
   const quarterControl = document.getElementById('quarter-select')?.closest('.control-group');
   const yearControl = document.getElementById('year-pills')?.closest('.control-group');
   const searchControl = document.getElementById('search-input')?.closest('.control-group');
+  // Supporters may browse every year and quarter, but the server only returns
+  // pastors explicitly assigned to their account. Keep operational filters hidden.
   if (typeFilter) typeFilter.style.display = supporter ? 'none' : '';
   if (status) status.style.display = supporter ? 'none' : '';
-  if (quarterControl) quarterControl.style.display = supporter ? 'none' : '';
-  if (yearControl) yearControl.style.display = supporter ? 'none' : '';
+  if (quarterControl) quarterControl.style.display = '';
+  if (yearControl) yearControl.style.display = '';
   if (searchControl) searchControl.style.display = supporter ? 'none' : '';
   ['btn-present','btn-download-pptx','btn-bulk-check-all','btn-bulk-clear-all','btn-exit-report','btn-add-pastor','btn-quick-save','btn-save-changes','btn-discard-changes','month-bulk-bar'].forEach(id => {
     const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
   });
   const toolbarTitle = document.getElementById('table-header-title');
-  if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastor';
+  if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastors';
+  const moreOptions = document.getElementById('btn-more-options');
+  if (moreOptions) moreOptions.style.display = supporter ? 'none' : '';
 }
 
 function showSupporterPending(show) {

@@ -1791,3 +1791,10 @@ body {
   .assignment-form-actions { flex-direction:column-reverse; }
   .assignment-form-actions .btn { width:100%; }
 }
+
+
+/* Supporter browsing note */
+.supporter-visibility-note{display:block;margin-top:4px;color:var(--text-subtle);font-size:.82rem;font-weight:500;}
+body.supporter-mode .supporter-visibility-note{display:block !important;}
+body.supporter-mode .app-header .header-actions{gap:10px;}
+@media (max-width:700px){body.supporter-mode .supporter-visibility-note{font-size:.75rem;} }
