@@ -333,6 +333,13 @@ function setupEventListeners() {
   document.getElementById('modal-user-management-close')?.addEventListener('click', closeUserManagement);
   document.getElementById('btn-create-user')?.addEventListener('click', () => openSignupModal(true));
   document.getElementById('user-search')?.addEventListener('input', renderUserManagement);
+  document.getElementById('user-sort')?.addEventListener('change', renderUserManagement);
+  document.getElementById('user-role-tabs')?.addEventListener('click', (e) => {
+    const tab = e.target.closest('.user-role-tab');
+    if (!tab) return;
+    document.querySelectorAll('.user-role-tab').forEach(el => el.classList.toggle('active', el === tab));
+    renderUserManagement();
+  });
   
   // Add Pastor Modal triggers
   document.getElementById('btn-add-pastor').addEventListener('click', () => {
@@ -525,16 +532,35 @@ function formatAssignedPastors(user){
 function renderUserManagement(){
   const list=document.getElementById('user-management-list'); if(!list)return;
   const q=(document.getElementById('user-search')?.value||'').toLowerCase().trim();
-  const users=managedUsers.filter(u=>!q||[u.name,u.username,u.email,u.phone,u.role,u.status,...getUserAssignedPastors(u).map(p=>p.name)].join(' ').toLowerCase().includes(q));
-  if(!users.length){list.innerHTML='<div class="audit-empty">No users found.</div>';return;}
+  const activeTab=document.querySelector('.user-role-tab.active')?.dataset.role || 'all';
+  const sortBy=document.getElementById('user-sort')?.value || 'name';
+  const counts={all:managedUsers.length,admin:0,staff:0,supporter:0};
+  managedUsers.forEach(u=>{ if(counts[u.role]!==undefined) counts[u.role]++; });
+  ['all','admin','staff','supporter'].forEach(role=>{const el=document.getElementById(`user-count-${role}`);if(el)el.textContent=counts[role];});
+  let users=managedUsers.filter(u=>{
+    const matchesRole=activeTab==='all'||u.role===activeTab;
+    const hay=[u.name,u.username,u.email,u.phone,u.role,u.status,...getUserAssignedPastors(u).map(p=>p.name)].join(' ').toLowerCase();
+    return matchesRole && (!q || hay.includes(q));
+  });
+  users.sort((a,b)=>{
+    if(sortBy==='role') return String(a.role||'').localeCompare(String(b.role||'')) || String(a.name||'').localeCompare(String(b.name||''));
+    if(sortBy==='status') return String(a.status||'').localeCompare(String(b.status||'')) || String(a.name||'').localeCompare(String(b.name||''));
+    return String(a.name||a.username||'').localeCompare(String(b.name||b.username||''));
+  });
+  const summary=document.getElementById('user-list-summary');
+  if(summary) summary.textContent=`Showing ${users.length} of ${managedUsers.length} user${managedUsers.length===1?'':'s'}`;
+  if(!users.length){list.innerHTML='<div class="user-empty-state"><i class="fa-solid fa-user-slash"></i><strong>No users found</strong><span>Try another search or role filter.</span></div>';return;}
   list.innerHTML=users.map(u=>{
     const assigned=getUserAssignedPastors(u);
-    const assignment=formatAssignedPastors(u);
     const isAdmin=currentUser?.role==='admin';
     const canDelete=isAdmin && u.role!=='admin';
-    const assignmentActions=u.role==='supporter' ? `<button class="btn btn-sm btn-primary" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}` : '';
-    const adminActions=isAdmin ? `<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')">Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')">Reset Password</button>${canDelete?`<button class="btn btn-sm btn-outline text-danger" onclick="deleteManagedUser('${u.id}')">Delete</button>`:''}` : '';
-    return `<div class="user-row"><div class="user-row-main"><strong>${escapeHtml(u.name||u.username)}</strong><small>@${escapeHtml(u.username)}</small></div><div class="user-meta">${escapeHtml(u.email||'No email')}<br>${escapeHtml(u.phone||'No phone')}</div><div class="user-meta"><b>${escapeHtml(String(u.role).toUpperCase())}</b><br><span class="user-status ${escapeHtml(u.status)}">${escapeHtml(u.status.replace('_',' '))}</span><br>${assignment}</div><div class="user-actions">${assignmentActions}${adminActions}</div></div>`;
+    const initials=(u.name||u.username||'U').split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase();
+    const roleLabel=String(u.role||'user').toUpperCase();
+    const statusLabel=String(u.status||'unknown').replace(/_/g,' ');
+    const assignmentText=assigned.length===0?'No pastor assigned':assigned.length===1?`Assigned: ${escapeHtml(assigned[0].name)}`:`Assigned (${assigned.length}): ${assigned.map(p=>escapeHtml(p.name)).join(', ')}`;
+    const assignmentActions=u.role==='supporter' ? `<button class="btn btn-sm btn-outline" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}` : '';
+    const adminActions=isAdmin ? `<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')"><i class="fa-solid fa-pen"></i> Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')"><i class="fa-solid fa-key"></i> Reset Password</button>${canDelete?`<button class="btn btn-sm btn-danger-outline" onclick="deleteManagedUser('${u.id}')"><i class="fa-solid fa-trash"></i> Delete</button>`:''}` : '';
+    return `<article class="user-card-v2">\n      <div class="user-card-identity">\n        <div class="user-avatar">${escapeHtml(initials)}</div>\n        <div class="user-identity-copy"><div class="user-name-line"><strong>${escapeHtml(u.name||u.username)}</strong><span class="user-role-badge role-${escapeHtml(u.role)}">${roleLabel}</span></div><div class="user-username">@${escapeHtml(u.username)}</div>\n          <div class="user-contact-list"><span><i class="fa-regular fa-envelope"></i>${escapeHtml(u.email||'No email')}</span><span><i class="fa-solid fa-phone"></i>${escapeHtml(u.phone||'No phone')}</span><span><i class="fa-solid fa-link"></i>${assignmentText}</span></div>\n        </div>\n      </div>\n      <div class="user-card-details">\n        <div class="user-status-card"><span class="status-dot ${escapeHtml(u.status)}"></span><div><strong>${escapeHtml(statusLabel.charAt(0).toUpperCase()+statusLabel.slice(1))} Account</strong><small>${u.status==='active'?'User can log in to the system.':'Account requires attention.'}</small></div></div>\n        <div class="user-detail-chip"><i class="fa-solid fa-users"></i><span><small>Account Type</small><strong>${roleLabel}</strong></span></div>\n        <div class="user-detail-chip"><i class="fa-regular fa-calendar"></i><span><small>Account Status</small><strong>${escapeHtml(statusLabel)}</strong></span></div>\n        <div class="user-card-actions">${assignmentActions}${adminActions}</div>\n      </div>\n    </article>`;
   }).join('');
 }
 async function getPastorChoices(){

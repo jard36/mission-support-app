@@ -546,8 +546,21 @@
     <div class="modal-content user-management-content">
       <div class="modal-header"><div><h3>User Management</h3><p class="modal-subtitle">Create accounts, approve supporters, assign pastors, and manage access.</p></div><button class="modal-close" id="modal-user-management-close">&times;</button></div>
       <div class="modal-body">
-        <div class="user-management-toolbar"><button class="btn btn-primary btn-sm" id="btn-create-user"><i class="fa-solid fa-user-plus"></i> Create Account</button><input id="user-search" class="form-input" placeholder="Search users..."></div>
-        <div id="user-management-list" class="user-management-list"></div>
+        <div class="user-management-toolbar user-management-toolbar-v2">
+          <div class="user-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input id="user-search" class="form-input" placeholder="Search users by name, username, email, phone..."></div>
+          <button class="btn btn-primary" id="btn-create-user"><i class="fa-solid fa-user-plus"></i> Create Account</button>
+        </div>
+        <div class="user-management-filters">
+          <div class="user-role-tabs" id="user-role-tabs">
+            <button type="button" class="user-role-tab active" data-role="all"><i class="fa-solid fa-users"></i> All Users <span id="user-count-all">0</span></button>
+            <button type="button" class="user-role-tab" data-role="admin"><i class="fa-solid fa-crown"></i> Admin <span id="user-count-admin">0</span></button>
+            <button type="button" class="user-role-tab" data-role="staff"><i class="fa-solid fa-shield-halved"></i> Staff <span id="user-count-staff">0</span></button>
+            <button type="button" class="user-role-tab" data-role="supporter"><i class="fa-solid fa-user"></i> Supporter <span id="user-count-supporter">0</span></button>
+          </div>
+          <label class="user-sort-wrap"><i class="fa-solid fa-arrow-down-a-z"></i><select id="user-sort" class="form-select"><option value="name">Sort by Name</option><option value="role">Sort by Role</option><option value="status">Sort by Status</option></select></label>
+        </div>
+        <div class="user-management-list" id="user-management-list"></div>
+        <div class="user-management-footer"><span id="user-list-summary">Showing 0 users</span></div>
       </div>
     </div>
   </div>
