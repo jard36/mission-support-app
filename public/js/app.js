@@ -212,13 +212,15 @@ function applyRoleUi() {
   if (report) report.style.display = supporter ? 'none' : '';
   const typeFilter = document.getElementById('pastor-type-filter');
   const status = document.getElementById('status-filter');
+  const typeFilterGroup = typeFilter?.closest('.control-group');
+  const statusFilterGroup = status?.closest('.control-group');
   const quarterControl = document.getElementById('quarter-select')?.closest('.control-group');
   const yearControl = document.getElementById('year-pills')?.closest('.control-group');
   const searchControl = document.getElementById('search-input')?.closest('.control-group');
-  // Supporters may browse every year and quarter, but the server only returns
-  // pastors explicitly assigned to their account. Keep operational filters hidden.
-  if (typeFilter) typeFilter.style.display = supporter ? 'none' : '';
-  if (status) status.style.display = supporter ? 'none' : '';
+  // Supporters may browse every year and quarter, but operational filters are
+  // not useful to them. Hide the entire Pastor Type/Status controls, including labels.
+  if (typeFilterGroup) typeFilterGroup.style.display = supporter ? 'none' : '';
+  if (statusFilterGroup) statusFilterGroup.style.display = supporter ? 'none' : '';
   if (quarterControl) quarterControl.style.display = '';
   if (yearControl) yearControl.style.display = '';
   if (searchControl) searchControl.style.display = supporter ? 'none' : '';
@@ -685,15 +687,20 @@ async function loadQuartersList() {
     state.quarters = data.quarters || [];
     state.reportMode = false;
     state.reportQuarters = [];
+    state.allMode = false;
     updateReportModeUi();
     updateLastUpdated(data.lastUpdated);
+
+    // On a fresh load, start on the latest available year (currently 2026).
+    // The quarter selector is populated from that year only, so it won't show
+    // quarters from older years until the user explicitly switches the year.
+    const defaultQ = state.quarters.length > 0 ? state.quarters[state.quarters.length - 1] : null;
+    state.activeYear = defaultQ?.year ?? null;
 
     renderYearPills();
     populateQuarterDropdown();
 
-    // Default select latest quarter (e.g. 2026-Q3)
-    if (state.quarters.length > 0) {
-      const defaultQ = state.quarters[state.quarters.length - 1];
+    if (defaultQ) {
       quarterSelect.value = defaultQ.id;
       await loadQuarterDetails(defaultQ.id);
     }
