@@ -63,6 +63,17 @@ function verifyPassword(password, record) {
 
 function sanitizeUser(user) {
   if (!user) return null;
+  const assignedPastors = Array.isArray(user.assignedPastors)
+    ? user.assignedPastors.map(p => ({
+        name: String(p?.name || '').trim(),
+        number: String(p?.number ?? '').trim(),
+        slot: String(p?.slot || '').trim().toUpperCase() || null
+      })).filter(p => p.name)
+    : (user.assignedPastor ? [{
+        name: String(user.assignedPastor.name || '').trim(),
+        number: String(user.assignedPastor.number ?? '').trim(),
+        slot: String(user.assignedPastor.slot || '').trim().toUpperCase() || null
+      }] : []);
   return {
     id: user.id,
     username: user.username,
@@ -71,8 +82,8 @@ function sanitizeUser(user) {
     status: user.status,
     email: user.email || '',
     phone: user.phone || '',
-    assignedPastors: Array.isArray(user.assignedPastors) ? user.assignedPastors : (user.assignedPastor ? [user.assignedPastor] : []),
-    assignedPastor: user.assignedPastor || (Array.isArray(user.assignedPastors) && user.assignedPastors[0]) || null,
+    assignedPastors,
+    assignedPastor: assignedPastors[0] || null,
     createdAt: user.createdAt
   };
 }
@@ -173,6 +184,15 @@ function getSupporterEntryFilter(user) {
   }));
   return (entry) => keys.some(assigned => normalizePastorKey(entry.name, entry.number) === assigned.key ||
     (String(entry.name || '').trim().toLowerCase() === assigned.name && (!assigned.number || String(entry.number || '') === assigned.number)));
+}
+
+function getEntrySupportSlots(entry) {
+  const slots = new Set();
+  ['m1','m2','m3'].forEach(key => {
+    const text = String(entry?.[key] || '');
+    for (const match of text.matchAll(/([A-E])\s*\./gi)) slots.add(match[1].toUpperCase());
+  });
+  return [...slots].sort();
 }
 
 function filterQuarterForUser(q, user) {
@@ -340,11 +360,29 @@ app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, re
     if (!user) return res.status(404).json({ error:'Supporter not found.' });
 
     let pastors = Array.isArray(req.body?.pastors) ? req.body.pastors : [];
-    if (!pastors.length && req.body?.name) pastors = [{ name:req.body.name, number:req.body.number }];
-    pastors = pastors.map(p => ({ name:String(p?.name || '').trim(), number:String(p?.number ?? '').trim() }))
+    if (!pastors.length && req.body?.name) pastors = [{ name:req.body.name, number:req.body.number, slot:req.body.slot }];
+    pastors = pastors.map(p => ({
+      name:String(p?.name || '').trim(),
+      number:String(p?.number ?? '').trim(),
+      slot:String(p?.slot || '').trim().toUpperCase()
+    }))
       .filter(p => p.name)
-      .filter((p, i, arr) => arr.findIndex(x => normalizePastorKey(x.name, x.number) === normalizePastorKey(p.name, p.number)) === i);
-    if (!pastors.length) return res.status(400).json({ error:'Select at least one pastor.' });
+      .filter((p, i, arr) => arr.findIndex(x => `${normalizePastorKey(x.name, x.number)}::${x.slot}` === `${normalizePastorKey(p.name, p.number)}::${p.slot}`) === i);
+    if (!pastors.length) return res.status(400).json({ error:'Select at least one pastor assignment.' });
+
+    // A/B/C/etc. represent distinct supporter slots for a pastor. Prevent two
+    // supporter accounts from taking the same slot while still allowing the
+    // same pastor to have multiple supporters. Legacy assignments without a
+    // slot remain valid and are treated as a general assignment.
+    const otherSupporters = db.users.filter(u => u.role === 'supporter' && u.id !== user.id);
+    for (const pastor of pastors) {
+      if (!pastor.slot) continue;
+      const taken = otherSupporters.some(other => {
+        const list = Array.isArray(other.assignedPastors) ? other.assignedPastors : (other.assignedPastor ? [other.assignedPastor] : []);
+        return list.some(a => normalizePastorKey(a.name, a.number) === normalizePastorKey(pastor.name, pastor.number) && String(a.slot || '').toUpperCase() === pastor.slot);
+      });
+      if (taken) return res.status(409).json({ error:`Supporter slot ${pastor.slot}. for ${pastor.name} is already assigned to another supporter.` });
+    }
 
     user.assignedPastors = pastors;
     user.assignedPastor = pastors[0];

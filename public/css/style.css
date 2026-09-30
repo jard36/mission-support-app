@@ -1891,3 +1891,68 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   .supporter-logout-btn span { display: none; }
 }
 
+
+/* Supporter-slot assignment (A/B/C/etc.) */
+.assignment-pastor-row {
+  grid-template-columns: 42px minmax(0, 1fr) minmax(210px, auto);
+  cursor: default;
+  min-height: 70px;
+}
+.assignment-pastor-row:hover { cursor: default; }
+.assignment-slots {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.assignment-slot-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid rgba(139,92,246,.28);
+  border-radius: 10px;
+  background: rgba(30,20,48,.72);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: .16s ease;
+  font-size: .72rem;
+  font-weight: 800;
+}
+.assignment-slot-chip input { position:absolute; opacity:0; pointer-events:none; }
+.assignment-slot-chip:hover:not(.is-taken) { border-color: rgba(139,92,246,.65); color:#fff; background:rgba(124,58,237,.16); }
+.assignment-slot-chip.is-selected { color:#fff; border-color:#8b5cf6; background:linear-gradient(135deg,#7c3aed,#8b5cf6); box-shadow:0 6px 16px rgba(124,58,237,.22); }
+.assignment-slot-chip.is-taken { opacity:.42; cursor:not-allowed; }
+.assignment-slot-letter { line-height:1; }
+.assignment-slot-lock { margin-left:5px; font-size:.58rem; }
+.assignment-slot-help {
+  display:flex;
+  align-items:flex-start;
+  gap:8px;
+  margin-top:10px;
+  padding:9px 11px;
+  border:1px solid rgba(139,92,246,.16);
+  border-radius:10px;
+  color:var(--text-subtle);
+  background:rgba(30,20,48,.3);
+  font-size:.68rem;
+  line-height:1.45;
+}
+.assignment-slot-help i { color:#a78bfa; margin-top:2px; }
+
+/* Keep the three-dot menu usable on smaller screens. */
+.dropdown-menu { max-height: min(72vh, 520px); overflow-y: auto; overscroll-behavior: contain; }
+@media (max-width:720px) {
+  .assignment-pastor-row { grid-template-columns: 34px minmax(0,1fr); align-items:start; }
+  .assignment-slots { grid-column: 1 / -1; justify-content:flex-start; padding-top:4px; }
+  .assignment-slot-chip { min-width:44px; }
+}
+@media (max-width:480px) {
+  .assignment-pastor-row { padding:9px; }
+  .assignment-slot-chip { min-width:42px; height:36px; }
+  .assignment-slot-help { font-size:.64rem; }
+}

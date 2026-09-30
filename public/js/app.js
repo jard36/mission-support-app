@@ -548,11 +548,15 @@ function getUserAssignedPastors(user){
   if(Array.isArray(user?.assignedPastors)) return user.assignedPastors;
   return user?.assignedPastor ? [user.assignedPastor] : [];
 }
+function formatAssignedPastorLabel(p){
+  const slot=p?.slot ? ` — ${escapeHtml(String(p.slot).toUpperCase())}.` : '';
+  return `${escapeHtml(p?.name || '')}${slot}`;
+}
 function formatAssignedPastors(user){
   const list=getUserAssignedPastors(user);
   if(!list.length) return 'No pastor assigned';
-  if(list.length===1) return `Assigned: ${escapeHtml(list[0].name)}`;
-  return `Assigned (${list.length}): ${list.map(p=>escapeHtml(p.name)).join(', ')}`;
+  if(list.length===1) return `Assigned: ${formatAssignedPastorLabel(list[0])}`;
+  return `Assigned (${list.length}): ${list.map(formatAssignedPastorLabel).join(', ')}`;
 }
 function renderUserManagement(){
   const list=document.getElementById('user-management-list'); if(!list)return;
@@ -584,7 +588,7 @@ function renderUserManagement(){
     const isDisabled=u.status==='disabled';
     const isPending=u.status==='pending_assignment';
     const statusLabel=isDisabled?'disabled':(isPending?'pending assignment':'active');
-    const assignmentText=assigned.length===0?'No pastor assigned':assigned.length===1?`Assigned: ${escapeHtml(assigned[0].name)}`:`Assigned (${assigned.length}): ${assigned.map(p=>escapeHtml(p.name)).join(', ')}`;
+    const assignmentText=assigned.length===0?'No pastor assigned':assigned.length===1?`Assigned: ${formatAssignedPastorLabel(assigned[0])}`:`Assigned (${assigned.length}): ${assigned.map(formatAssignedPastorLabel).join(', ')}`;
     const assignmentActions=u.role==='supporter' ? `<button class="btn btn-sm btn-outline" onclick="assignSupporter('${u.id}')"><i class="fa-solid fa-user-check"></i> ${assigned.length?'Edit Assignment':'Assign Pastor'}</button>${assigned.length?`<button class="btn btn-sm btn-outline" onclick="unassignSupporter('${u.id}')">Unassign All</button>`:''}` : '';
     const toggle=isAdmin ? `<div class="account-toggle-row"><span><strong>${isDisabled?'Account Disabled':'Account Enabled'}</strong><small>${isDisabled?'User cannot sign in until re-enabled.':'User can sign in to the system.'}</small></span><button type="button" class="toggle-switch ${isDisabled?'':'is-on'}" aria-pressed="${isDisabled?'false':'true'}" title="${isDisabled?'Enable account':'Disable account'}" onclick="toggleManagedUserStatus('${u.id}')"><span></span></button></div>` : '';
     const adminActions=isAdmin ? `<button class="btn btn-sm btn-outline" onclick="editManagedUser('${u.id}')"><i class="fa-solid fa-pen"></i> Edit</button><button class="btn btn-sm btn-outline" onclick="resetManagedPassword('${u.id}')"><i class="fa-solid fa-key"></i> Reset Password</button>${canDelete?`<button class="btn btn-sm btn-danger-outline" onclick="deleteManagedUser('${u.id}')"><i class="fa-solid fa-trash"></i> Delete</button>`:''}` : '';
@@ -605,19 +609,52 @@ function renderUserManagement(){
     </article>`;
   }).join('');
 }
+function parseSupportSlotsFromPastor(entry){
+  const slots=new Set();
+  ['m1','m2','m3'].forEach(key=>{
+    const value=String(entry?.[key]||'');
+    for(const match of value.matchAll(/([A-E])\s*\./gi)) slots.add(match[1].toUpperCase());
+  });
+  return [...slots].sort();
+}
+function assignmentKey(p){
+  return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}::${String(p.slot||'').trim().toUpperCase()}`;
+}
+function pastorBaseKey(p){
+  return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}`;
+}
+function getTakenAssignmentSlots(){
+  const taken=new Map();
+  managedUsers.filter(u=>u.role==='supporter' && u.id!==assignmentUserId).forEach(u=>{
+    getUserAssignedPastors(u).forEach(a=>{
+      const slot=String(a?.slot||'').trim().toUpperCase();
+      if(!slot)return;
+      const key=pastorBaseKey(a);
+      if(!taken.has(key))taken.set(key,new Map());
+      taken.get(key).set(slot,u.name||u.username||'another supporter');
+    });
+  });
+  return taken;
+}
 async function getPastorChoices(){
   const res=await fetch('/api/quarters'); const data=await res.json(); if(!res.ok)throw new Error(data.error||'Unable to load pastors');
   const latest=data.quarters?.[data.quarters.length-1]; if(!latest) return [];
   const qr=await fetch(`/api/quarters/${latest.id}`); const q=await qr.json(); if(!qr.ok)throw new Error(q.error||'Unable to load pastors');
-  const seen=new Set();
-  return (q.entries||[]).filter(p=>{const key=`${p.number||''}::${String(p.name||'').toLowerCase()}`;if(seen.has(key))return false;seen.add(key);return true;});
+  const seen=new Map();
+  (q.entries||[]).filter(p=>!p.hidden).forEach(p=>{
+    const key=pastorBaseKey(p);
+    if(seen.has(key)) return;
+    const supportSlots=parseSupportSlotsFromPastor(p);
+    seen.set(key,{...p,supportSlots:supportSlots.length?supportSlots:['']});
+  });
+  return [...seen.values()];
 }
 function ensureAssignmentModal(){
   let modal=document.getElementById('assign-pastor-modal');
   if(modal) return modal;
   modal=document.createElement('div');
   modal.className='modal'; modal.id='assign-pastor-modal';
-  modal.innerHTML=`<div class="modal-backdrop"></div><div class="modal-content assignment-modal-content"><div class="modal-header"><div class="assignment-title-wrap"><div class="assignment-title-icon"><i class="fa-solid fa-users"></i></div><div><h3>Edit Pastor Assignment</h3><p class="modal-subtitle" id="assign-pastor-subtitle">Assign one or more pastors.</p></div></div><button class="modal-close" id="assign-pastor-close">&times;</button></div><div class="modal-body assignment-modal-body"><div class="assignment-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input id="assign-pastor-search" class="form-input" placeholder="Search pastor by name or number..."></div><div class="assignment-filter-row"><div class="assignment-type-tabs"><button type="button" class="assignment-type-tab active" data-type="All">All Pastors <span id="assign-count-all">0</span></button><button type="button" class="assignment-type-tab" data-type="Local">Local Pastors <span id="assign-count-local">0</span></button><button type="button" class="assignment-type-tab" data-type="Foreign">Foreign Pastors <span id="assign-count-foreign">0</span></button></div><label class="assignment-sort-wrap"><i class="fa-solid fa-arrow-down-a-z"></i><select id="assign-pastor-sort" class="form-select"><option value="name">Sort by Name</option><option value="number">Sort by Number</option></select></label></div><div class="assignment-list-shell"><div class="assignment-list-toolbar"><span id="assign-pastor-count">0 selected</span><div><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-select-all"><i class="fa-solid fa-check-double"></i> Select All</button><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-clear"><i class="fa-solid fa-eraser"></i> Clear</button></div></div><div id="assign-pastor-options" class="assignment-options"></div></div><div class="form-actions assignment-form-actions"><button type="button" class="btn btn-outline" id="assign-pastor-cancel">Cancel</button><button type="button" class="btn btn-primary" id="assign-pastor-save"><i class="fa-solid fa-check"></i> Save Assignment</button></div></div></div>`;
+  modal.innerHTML=`<div class="modal-backdrop"></div><div class="modal-content assignment-modal-content"><div class="modal-header"><div class="assignment-title-wrap"><div class="assignment-title-icon"><i class="fa-solid fa-users"></i></div><div><h3>Edit Pastor Assignment</h3><p class="modal-subtitle" id="assign-pastor-subtitle">Choose the pastor and supporter slot.</p></div></div><button class="modal-close" id="assign-pastor-close">&times;</button></div><div class="modal-body assignment-modal-body"><div class="assignment-search-wrap"><i class="fa-solid fa-magnifying-glass"></i><input id="assign-pastor-search" class="form-input" placeholder="Search pastor by name or number..."></div><div class="assignment-filter-row"><div class="assignment-type-tabs"><button type="button" class="assignment-type-tab active" data-type="All">All Pastors <span id="assign-count-all">0</span></button><button type="button" class="assignment-type-tab" data-type="Local">Local Pastors <span id="assign-count-local">0</span></button><button type="button" class="assignment-type-tab" data-type="Foreign">Foreign Pastors <span id="assign-count-foreign">0</span></button></div><label class="assignment-sort-wrap"><i class="fa-solid fa-arrow-down-a-z"></i><select id="assign-pastor-sort" class="form-select"><option value="name">Sort by Name</option><option value="number">Sort by Number</option></select></label></div><div class="assignment-list-shell"><div class="assignment-list-toolbar"><span id="assign-pastor-count">0 selected</span><div><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-select-all"><i class="fa-solid fa-check-double"></i> Select All Available</button><button type="button" class="btn btn-sm btn-outline" id="assign-pastor-clear"><i class="fa-solid fa-eraser"></i> Clear</button></div></div><div id="assign-pastor-options" class="assignment-options"></div></div><div class="assignment-slot-help"><i class="fa-solid fa-circle-info"></i><span>A, B, C, etc. are the supporter slots recorded for that pastor. Select the exact slot assigned to this supporter.</span></div><div class="form-actions assignment-form-actions"><button type="button" class="btn btn-outline" id="assign-pastor-cancel">Cancel</button><button type="button" class="btn btn-primary" id="assign-pastor-save"><i class="fa-solid fa-check"></i> Save Assignment</button></div></div></div>`;
   document.body.appendChild(modal);
   modal.querySelector('#assign-pastor-close').onclick=closeAssignmentModal;
   modal.querySelector('#assign-pastor-cancel').onclick=closeAssignmentModal;
@@ -625,7 +662,7 @@ function ensureAssignmentModal(){
   modal.querySelector('#assign-pastor-search').addEventListener('input',renderAssignmentOptions);
   modal.querySelector('#assign-pastor-sort').addEventListener('change',renderAssignmentOptions);
   modal.querySelectorAll('.assignment-type-tab').forEach(btn=>btn.addEventListener('click',()=>{modal.querySelectorAll('.assignment-type-tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');renderAssignmentOptions();}));
-  modal.querySelector('#assign-pastor-select-all').onclick=()=>{const filtered=getFilteredAssignmentPastors();filtered.forEach(p=>assignmentSelected.add(assignmentKey(p)));renderAssignmentOptions();};
+  modal.querySelector('#assign-pastor-select-all').onclick=()=>{getFilteredAssignmentPastors().forEach(p=>p.supportSlots.forEach(slot=>{const key=assignmentKey({...p,slot});if(!isAssignmentSlotTaken(p,slot))assignmentSelected.add(key);}));renderAssignmentOptions();};
   modal.querySelector('#assign-pastor-clear').onclick=()=>{assignmentSelected.clear();renderAssignmentOptions();};
   modal.querySelector('#assign-pastor-save').onclick=saveAssignment;
   return modal;
@@ -633,7 +670,6 @@ function ensureAssignmentModal(){
 let assignmentPastors=[];
 let assignmentSelected=new Set();
 let assignmentUserId=null;
-function assignmentKey(p){return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}`;}
 function getFilteredAssignmentPastors(){
   const modal=ensureAssignmentModal();
   const q=(modal.querySelector('#assign-pastor-search').value||'').trim().toLowerCase();
@@ -647,14 +683,32 @@ function getFilteredAssignmentPastors(){
   options.sort((a,b)=>sort==='number' ? Number(a.number||0)-Number(b.number||0) : String(a.name||'').localeCompare(String(b.name||'')) || Number(a.number||0)-Number(b.number||0));
   return options;
 }
+function isAssignmentSlotTaken(p,slot){
+  if(!slot)return false;
+  return !!getTakenAssignmentSlots().get(pastorBaseKey(p))?.has(String(slot).toUpperCase());
+}
 function renderAssignmentOptions(){
   const modal=ensureAssignmentModal();
   const counts={all:assignmentPastors.length,local:0,foreign:0};
   assignmentPastors.forEach(p=>{const t=normalizePastorType(p.pastorType);if(t==='Local')counts.local++;if(t==='Foreign')counts.foreign++;});
   ['all','local','foreign'].forEach(k=>{const el=modal.querySelector(`#assign-count-${k}`);if(el)el.textContent=counts[k];});
   const options=getFilteredAssignmentPastors();
-  modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} selected`;
-  modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{const key=assignmentKey(p);const type=normalizePastorType(p.pastorType);const meta=type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor');return `<label class="assignment-option ${assignmentSelected.has(key)?'is-selected':''}"><input type="checkbox" value="${escapeHtml(key)}" ${assignmentSelected.has(key)?'checked':''}><span class="assignment-check"><i class="fa-solid fa-check"></i></span><span class="assignment-option-number">${escapeHtml(String(p.number||''))}</span><span class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${meta}</small></span><span class="assignment-type-badge ${type.toLowerCase()}">${type}</span></label>`;}).join(''):'<div class="audit-empty">No pastors found.</div>';
+  modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} slot${assignmentSelected.size===1?'':'s'} selected`;
+  const taken=getTakenAssignmentSlots();
+  modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{
+    const type=normalizePastorType(p.pastorType);
+    const base=pastorBaseKey(p);
+    const slots=p.supportSlots||[''];
+    const slotHtml=slots.map(slot=>{
+      const label=slot||'General';
+      const key=assignmentKey({...p,slot});
+      const selected=assignmentSelected.has(key);
+      const takenBy=slot?taken.get(base)?.get(slot):null;
+      const disabled=!!takenBy && !selected;
+      return `<label class="assignment-slot-chip ${selected?'is-selected':''} ${disabled?'is-taken':''}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}"><input type="checkbox" value="${escapeHtml(key)}" ${selected?'checked':''} ${disabled?'disabled':''}><span class="assignment-slot-letter">${escapeHtml(label)}${slot?'.':''}</span>${disabled?'<span class="assignment-slot-lock"><i class="fa-solid fa-lock"></i></span>':''}</label>`;
+    }).join('');
+    return `<article class="assignment-option assignment-pastor-row"><div class="assignment-option-number">${escapeHtml(String(p.number||''))}</div><div class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor')} · ${slots.length} supporter slot${slots.length===1?'':'s'}</small></div><div class="assignment-slots">${slotHtml}</div></article>`;
+  }).join(''):'<div class="audit-empty">No pastors found.</div>';
   modal.querySelectorAll('#assign-pastor-options input').forEach(input=>input.addEventListener('change',()=>{if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);renderAssignmentOptions();}));
 }
 function closeAssignmentModal(){document.getElementById('assign-pastor-modal')?.classList.remove('show');}
@@ -662,17 +716,18 @@ async function assignSupporter(id){
   try{
     const user=managedUsers.find(x=>x.id===id); assignmentUserId=id; assignmentPastors=await getPastorChoices();
     if(!assignmentPastors.length)return showToast('No pastors available to assign.','error');
-    const existing=getUserAssignedPastors(user); assignmentSelected=new Set(existing.map(assignmentKey));
-    const modal=ensureAssignmentModal(); modal.querySelector('#assign-pastor-subtitle').textContent=`Assign one or more pastors to ${user?.name||'this supporter'}.`;
+    const existing=getUserAssignedPastors(user); assignmentSelected=new Set(existing.map(a=>assignmentKey({...a,slot:a.slot||''})));
+    const modal=ensureAssignmentModal(); modal.querySelector('#assign-pastor-subtitle').textContent=`Choose the pastor and the A/B/C/etc. supporter slot for ${user?.name||'this supporter'}.`;
     modal.querySelector('#assign-pastor-search').value=''; renderAssignmentOptions(); modal.classList.add('show');
   }catch(err){showToast(err.message,'error');}
 }
 async function saveAssignment(){
   const btn=document.getElementById('assign-pastor-save');
   if(!assignmentUserId)return;
-  if(!assignmentSelected.size)return showToast('Select at least one pastor.','error');
-  const pastors=assignmentPastors.filter(p=>assignmentSelected.has(assignmentKey(p))).map(p=>({name:p.name,number:p.number}));
-  try{btn.disabled=true;const res=await fetch(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
+  if(!assignmentSelected.size)return showToast('Select at least one pastor slot.','error');
+  const pastors=assignmentPastors.flatMap(p=>(p.supportSlots||['']).map(slot=>({...p,slot}))).filter(p=>assignmentSelected.has(assignmentKey(p))).map(p=>({name:p.name,number:p.number,slot:p.slot||null}));
+  if(!pastors.length)return showToast('Select at least one pastor slot.','error');
+  try{btn.disabled=true;const res=await fetch(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor slot${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
 }
 async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await fetch(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
 async function toggleManagedUserStatus(id){
