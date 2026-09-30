@@ -695,22 +695,70 @@ function renderAssignmentOptions(){
   const options=getFilteredAssignmentPastors();
   modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} slot${assignmentSelected.size===1?'':'s'} selected`;
   const taken=getTakenAssignmentSlots();
+
   modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{
     const type=normalizePastorType(p.pastorType);
     const base=pastorBaseKey(p);
-    const slots=p.supportSlots||[''];
-    const slotHtml=slots.map(slot=>{
-      const label=slot||'General';
+    const slots=(p.supportSlots&&p.supportSlots.length)?p.supportSlots:[''];
+    const availableSlots=slots.filter(slot=>!isAssignmentSlotTaken(p,slot));
+    const selectedSlots=slots.filter(slot=>assignmentSelected.has(assignmentKey({...p,slot})));
+    const allSelected=availableSlots.length>0 && availableSlots.every(slot=>assignmentSelected.has(assignmentKey({...p,slot})));
+    const partiallySelected=selectedSlots.length>0 && !allSelected;
+    const parentDisabled=availableSlots.length===0 && selectedSlots.length===0;
+    const parentTitle=slots.length>1
+      ? (allSelected?'Clear all available supporter slots':'Select all available supporter slots')
+      : (allSelected?'Clear pastor assignment':'Select pastor assignment');
+
+    const slotHtml=slots.length>1 ? slots.map(slot=>{
+      const label=String(slot||'').trim().toUpperCase();
       const key=assignmentKey({...p,slot});
       const selected=assignmentSelected.has(key);
-      const takenBy=slot?taken.get(base)?.get(slot):null;
+      const takenBy=taken.get(base)?.get(label);
       const disabled=!!takenBy && !selected;
-      return `<label class="assignment-slot-chip ${selected?'is-selected':''} ${disabled?'is-taken':''}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}"><input type="checkbox" value="${escapeHtml(key)}" ${selected?'checked':''} ${disabled?'disabled':''}><span class="assignment-slot-letter">${escapeHtml(label)}${slot?'.':''}</span>${disabled?'<span class="assignment-slot-lock"><i class="fa-solid fa-lock"></i></span>':''}</label>`;
-    }).join('');
-    return `<article class="assignment-option assignment-pastor-row"><div class="assignment-option-number">${escapeHtml(String(p.number||''))}</div><div class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor')} · ${slots.length} supporter slot${slots.length===1?'':'s'}</small></div><div class="assignment-slots">${slotHtml}</div></article>`;
+      return `<label class="assignment-slot-check ${selected?'is-selected':''} ${disabled?'is-taken':''}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}"><input type="checkbox" class="assignment-slot-input" value="${escapeHtml(key)}" ${selected?'checked':''} ${disabled?'disabled':''}><span class="assignment-check assignment-slot-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span><span class="assignment-slot-letter">${escapeHtml(label)}</span></label>`;
+    }).join('') : '';
+
+    return `<article class="assignment-option assignment-pastor-row ${allSelected?'is-selected':''} ${partiallySelected?'is-partial':''}">
+      <label class="assignment-pastor-check" title="${escapeHtml(parentTitle)}">
+        <input type="checkbox" class="assignment-pastor-input" data-pastor-base="${escapeHtml(base)}" ${allSelected?'checked':''} ${parentDisabled?'disabled':''}>
+        <span class="assignment-check assignment-pastor-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span>
+      </label>
+      <div class="assignment-option-number">${escapeHtml(String(p.number||''))}</div>
+      <div class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor')} · ${slots.length} supporter slot${slots.length===1?'':'s'}</small></div>
+      <div class="assignment-slots">${slotHtml}</div>
+    </article>`;
   }).join(''):'<div class="audit-empty">No pastors found.</div>';
-  modal.querySelectorAll('#assign-pastor-options input').forEach(input=>input.addEventListener('change',()=>{if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);renderAssignmentOptions();}));
+
+  modal.querySelectorAll('#assign-pastor-options .assignment-pastor-input').forEach(input=>input.addEventListener('change',()=>{
+    const base=input.dataset.pastorBase;
+    const pastor=assignmentPastors.find(p=>pastorBaseKey(p)===base);
+    if(!pastor)return;
+    const slots=(pastor.supportSlots&&pastor.supportSlots.length)?pastor.supportSlots:[''];
+    const available=slots.filter(slot=>!isAssignmentSlotTaken(pastor,slot));
+    if(input.checked){
+      available.forEach(slot=>assignmentSelected.add(assignmentKey({...pastor,slot})));
+    }else{
+      available.forEach(slot=>assignmentSelected.delete(assignmentKey({...pastor,slot})));
+    }
+    renderAssignmentOptions();
+  }));
+
+  modal.querySelectorAll('#assign-pastor-options .assignment-slot-input').forEach(input=>input.addEventListener('change',()=>{
+    if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);
+    renderAssignmentOptions();
+  }));
+
+  modal.querySelectorAll('#assign-pastor-options .assignment-pastor-input').forEach(input=>{
+    const base=input.dataset.pastorBase;
+    const pastor=assignmentPastors.find(p=>pastorBaseKey(p)===base);
+    if(!pastor)return;
+    const slots=(pastor.supportSlots&&pastor.supportSlots.length)?pastor.supportSlots:[''];
+    const available=slots.filter(slot=>!isAssignmentSlotTaken(pastor,slot));
+    const selected=available.filter(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
+    input.indeterminate=selected.length>0 && selected.length<available.length;
+  });
 }
+
 function closeAssignmentModal(){document.getElementById('assign-pastor-modal')?.classList.remove('show');}
 async function assignSupporter(id){
   try{

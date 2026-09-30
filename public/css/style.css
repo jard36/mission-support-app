@@ -1894,41 +1894,75 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 
 /* Supporter-slot assignment (A/B/C/etc.) */
 .assignment-pastor-row {
-  grid-template-columns: 42px minmax(0, 1fr) minmax(210px, auto);
+  grid-template-columns: 34px 42px minmax(0, 1fr) minmax(210px, auto);
   cursor: default;
   min-height: 70px;
 }
 .assignment-pastor-row:hover { cursor: default; }
+.assignment-pastor-check,
+.assignment-slot-check {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  cursor:pointer;
+}
+.assignment-pastor-check { width:26px; height:26px; }
+.assignment-pastor-input,
+.assignment-slot-input { position:absolute; opacity:0; pointer-events:none; }
+.assignment-pastor-box,
+.assignment-slot-box {
+  width:22px;
+  height:22px;
+  border-radius:6px;
+  border:2px solid #766b83;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:transparent;
+  background:transparent;
+  transition:.15s ease;
+  flex:none;
+}
+.assignment-pastor-box i,
+.assignment-slot-box i { font-size:10px; }
+.assignment-pastor-check:hover .assignment-pastor-box,
+.assignment-slot-check:hover:not(.is-taken) .assignment-slot-box {
+  border-color:#a78bfa;
+  background:rgba(124,58,237,.12);
+}
+.assignment-pastor-input:checked + .assignment-pastor-box,
+.assignment-pastor-input:indeterminate + .assignment-pastor-box,
+.assignment-slot-input:checked + .assignment-slot-box {
+  background:#7c3aed;
+  border-color:#8b5cf6;
+  color:#fff;
+}
+.assignment-pastor-input:indeterminate + .assignment-pastor-box::after {
+  content:'';
+  width:9px;
+  height:2px;
+  border-radius:2px;
+  background:#fff;
+}
+.assignment-pastor-row.is-selected { border-color:rgba(139,92,246,.55); background:rgba(124,58,237,.13); }
+.assignment-pastor-row.is-partial { border-color:rgba(139,92,246,.34); background:rgba(124,58,237,.07); }
+.assignment-pastor-input:disabled + .assignment-pastor-box { opacity:.4; cursor:not-allowed; }
+.assignment-option-number { color:var(--text-subtle); font-size:.72rem; font-weight:700; text-align:right; }
+.assignment-option-copy { display:flex; flex-direction:column; min-width:0; gap:3px; }
+.assignment-option-copy strong { color:var(--text-main); font-size:.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.assignment-option-copy small { color:var(--text-subtle); font-size:.68rem; }
 .assignment-slots {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-  flex-wrap: wrap;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:12px;
+  flex-wrap:wrap;
 }
-.assignment-slot-chip {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 42px;
-  height: 38px;
-  padding: 0 10px;
-  border: 1px solid rgba(139,92,246,.28);
-  border-radius: 10px;
-  background: rgba(30,20,48,.72);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: .16s ease;
-  font-size: .72rem;
-  font-weight: 800;
-}
-.assignment-slot-chip input { position:absolute; opacity:0; pointer-events:none; }
-.assignment-slot-chip:hover:not(.is-taken) { border-color: rgba(139,92,246,.65); color:#fff; background:rgba(124,58,237,.16); }
-.assignment-slot-chip.is-selected { color:#fff; border-color:#8b5cf6; background:linear-gradient(135deg,#7c3aed,#8b5cf6); box-shadow:0 6px 16px rgba(124,58,237,.22); }
-.assignment-slot-chip.is-taken { opacity:.42; cursor:not-allowed; }
-.assignment-slot-letter { line-height:1; }
-.assignment-slot-lock { margin-left:5px; font-size:.58rem; }
+.assignment-slot-check { min-width:36px; height:34px; color:var(--text-muted); font-size:.72rem; font-weight:800; }
+.assignment-slot-check.is-taken { opacity:.42; cursor:not-allowed; }
+.assignment-slot-check.is-taken .assignment-slot-box { cursor:not-allowed; }
+.assignment-slot-letter { line-height:1; min-width:10px; }
 .assignment-slot-help {
   display:flex;
   align-items:flex-start;
@@ -1947,12 +1981,12 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 /* Keep the three-dot menu usable on smaller screens. */
 .dropdown-menu { max-height: min(72vh, 520px); overflow-y: auto; overscroll-behavior: contain; }
 @media (max-width:720px) {
-  .assignment-pastor-row { grid-template-columns: 34px minmax(0,1fr); align-items:start; }
+  .assignment-pastor-row { grid-template-columns: 34px 34px minmax(0,1fr); align-items:start; }
   .assignment-slots { grid-column: 1 / -1; justify-content:flex-start; padding-top:4px; }
-  .assignment-slot-chip { min-width:44px; }
+  .assignment-slot-check { min-width:40px; }
 }
 @media (max-width:480px) {
   .assignment-pastor-row { padding:9px; }
-  .assignment-slot-chip { min-width:42px; height:36px; }
+  .assignment-slot-check { min-width:38px; height:34px; }
   .assignment-slot-help { font-size:.64rem; }
 }
