@@ -18,6 +18,7 @@ function applyTheme(theme) {
 }
 
 async function downloadPptxFile(url) {
+  const powerpointType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   try {
     const response = await fetch(url, { credentials: 'same-origin' });
     if (!response.ok) {
@@ -28,6 +29,13 @@ async function downloadPptxFile(url) {
     }
     const blob = await response.blob();
     if (!blob.size) throw new Error('The PowerPoint export was empty. Please try again.');
+    const signature = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+    if (signature[0] !== 0x50 || signature[1] !== 0x4b) {
+      const responseText = await blob.text().catch(() => '');
+      let errorMessage = responseText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+      try { errorMessage = JSON.parse(responseText).error || errorMessage; } catch (_) {}
+      throw new Error(errorMessage || 'The server returned a response that is not a PowerPoint file.');
+    }
     const disposition = response.headers.get('Content-Disposition') || '';
     const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
     const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
@@ -35,7 +43,8 @@ async function downloadPptxFile(url) {
     if (encodedName) {
       try { filename = decodeURIComponent(encodedName); } catch (_) { filename = encodedName; }
     }
-    const objectUrl = URL.createObjectURL(blob);
+    const powerpointBlob = blob.type === powerpointType ? blob : new Blob([blob], { type: powerpointType });
+    const objectUrl = URL.createObjectURL(powerpointBlob);
     const link = document.createElement('a');
     link.href = objectUrl;
     link.download = filename;

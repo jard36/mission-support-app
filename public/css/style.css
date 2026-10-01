@@ -2176,6 +2176,11 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 :root[data-theme="light"] .pending-remove { color:#655b71; }
 :root[data-theme="light"] .pending-panel-close:hover,
 :root[data-theme="light"] .pending-remove:hover { color:#30263d; }
+:root[data-theme="light"] .mini-status-btn { color:#50435e; }
+:root[data-theme="light"] .mini-check-box { background:#fff; color:#50435e; border-color:#a89ab7; }
+:root[data-theme="light"] .mini-status-btn.is-checked { color:#145e48 !important; border-color:#168764; background:#d9f3e9; }
+:root[data-theme="light"] .mini-status-btn.is-checked .mini-status-letter { color:#145e48; }
+:root[data-theme="light"] .mini-status-btn.is-checked .mini-check-box { color:#075c44; border-color:#168764; background:#bcebdc; }
 :root[data-theme="light"] .all-quarter-heading { background:#f0ebf6; }
 :root[data-theme="light"] .assignment-option.is-selected { background:#efe8f8; }
 :root[data-theme="light"] .assignment-type-badge.foreign,

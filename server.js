@@ -787,6 +787,17 @@ function syncPastorTypeAcrossQuarters(db, names, pastorType) {
   return [...updatedQuarters];
 }
 
+async function sendPptxDownload(res, pptx, filename) {
+  const buffer = await pptx.write({ outputType: 'nodebuffer' });
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) throw new Error('PowerPoint generation returned an invalid file.');
+  res.status(200);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', String(buffer.length));
+  res.setHeader('Cache-Control', 'private, no-store');
+  return res.end(buffer);
+}
+
 function normalizeEntry(entry) {
   entry.pastorType = normalizePastorType(entry.pastorType);
   entry.hidden = entry.hidden === true;
@@ -1482,12 +1493,8 @@ app.get('/api/export/pptx/:quarterId', async (req, res) => {
 
     const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
     const pptx = await buildPptx([q], { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
-    const buffer = await pptx.write({ outputType: 'nodebuffer' });
     const filename = `Mission_Support_${q.id}.pptx`;
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    await sendPptxDownload(res, pptx, filename);
   } catch (err) {
     console.error('Export error:', err);
     res.status(500).json({ error: err.message });
@@ -1505,12 +1512,9 @@ app.get('/api/export/pptx-report', async (req, res) => {
     const statusFilter = req.query.statusFilter || 'All';
     const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
     const pptx = await buildPptx(quarterList, { pastorType, statusFilter, latestQuarterId: latestId });
-    const buffer = await pptx.write({ outputType: 'nodebuffer' });
     const label = ids.length === 1 ? ids[0] : `${quarterList[0].year}-${quarterList[quarterList.length - 1].year}`;
     const filename = `Mission_Support_Report_${label}.pptx`;
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    await sendPptxDownload(res, pptx, filename);
   } catch (err) {
     console.error('Report export error:', err);
     res.status(500).json({ error: err.message });
@@ -1524,12 +1528,8 @@ app.get('/api/export/pptx-all', async (req, res) => {
     const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
     const visibleQuarters = req.user?.role === 'supporter' ? db.quarters.map(q => filterQuarterForUser(q, req.user)) : db.quarters;
     const pptx = await buildPptx(visibleQuarters, { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
-    const buffer = await pptx.write({ outputType: 'nodebuffer' });
     const filename = 'Mission_Support_All_Quarters.pptx';
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(buffer);
+    await sendPptxDownload(res, pptx, filename);
   } catch (err) {
     console.error('Export error:', err);
     res.status(500).json({ error: err.message });
