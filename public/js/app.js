@@ -17,6 +17,38 @@ function applyTheme(theme) {
   });
 }
 
+async function downloadPptxFile(url) {
+  try {
+    const response = await fetch(url, { credentials: 'same-origin' });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      let payload = {};
+      try { payload = JSON.parse(body); } catch (_) { payload.error = body; }
+      throw new Error(payload.error || `PowerPoint export failed (${response.status}).`);
+    }
+    const blob = await response.blob();
+    if (!blob.size) throw new Error('The PowerPoint export was empty. Please try again.');
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    let filename = plainName || 'Mission_Support_Report.pptx';
+    if (encodedName) {
+      try { filename = decodeURIComponent(encodedName); } catch (_) { filename = encodedName; }
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    showToast('PowerPoint download started.', 'success');
+  } catch (error) {
+    showToast(`PowerPoint download failed: ${error.message}`, 'error');
+  }
+}
+
 let state = {
   quarters: [],
   currentQuarter: null,
@@ -439,18 +471,18 @@ function setupEventListeners() {
       downloadReportPptx();
     } else if (state.allMode) {
       showToast('Preparing complete all-quarters PowerPoint presentation...', 'info');
-      window.location.href = `/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
+      downloadPptxFile(`/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`);
     } else if (state.currentQuarter) {
       showToast('Preparing PowerPoint presentation for download...', 'info');
       const qs = new URLSearchParams({ pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter });
-      window.location.href = `/api/export/pptx/${state.currentQuarter.id}?${qs.toString()}`;
+      downloadPptxFile(`/api/export/pptx/${encodeURIComponent(state.currentQuarter.id)}?${qs.toString()}`);
     }
   });
 
   document.getElementById('action-download-all').addEventListener('click', (e) => {
     e.preventDefault();
     showToast('Preparing complete 14-quarter presentation...', 'info');
-    window.location.href = `/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
+    downloadPptxFile(`/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`);
   });
 
   document.getElementById('action-backup-json').addEventListener('click', (e) => {
@@ -494,8 +526,8 @@ function setupEventListeners() {
   document.getElementById('pres-next').addEventListener('click', nextSlide);
   document.getElementById('pres-download').addEventListener('click', () => {
     if (state.reportMode && state.reportQuarters.length) downloadReportPptx();
-    else if (state.allMode) window.location.href = `/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
-    else if (state.currentQuarter) window.location.href = `/api/export/pptx/${state.currentQuarter.id}?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`;
+    else if (state.allMode) downloadPptxFile(`/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`);
+    else if (state.currentQuarter) downloadPptxFile(`/api/export/pptx/${encodeURIComponent(state.currentQuarter.id)}?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`);
   });
   document.getElementById('pres-fullscreen').addEventListener('click', toggleFullscreen);
   document.getElementById('modal-audit-close').addEventListener('click', closeAuditModal);
@@ -1708,7 +1740,7 @@ function downloadReportPptx() {
   const status = state.reportMode ? state.reportFilters.statusFilter : document.getElementById('report-status-filter').value;
   const params = new URLSearchParams({ quarterIds: ids.join(','), pastorType, statusFilter: status });
   showToast('Preparing mission report PowerPoint...', 'info');
-  window.location.href = `/api/export/pptx-report?${params.toString()}`;
+  downloadPptxFile(`/api/export/pptx-report?${params.toString()}`);
 }
 
 function updateReportModeUi() {

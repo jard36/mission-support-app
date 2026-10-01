@@ -1,3 +1,5 @@
+import Script from 'next/script';
+
 export const metadata = {
   title: 'Mission Support Tracker & PPT Generator',
   description: 'Living Hope Baptist Church mission support tracker.',
@@ -8,8 +10,11 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <html lang="en" data-theme="current">
       <head>
+        <Script id="living-hope-theme-init" strategy="beforeInteractive">
+          {`try { document.documentElement.dataset.theme = localStorage.getItem('livingHopeTheme') === 'light' ? 'light' : 'current'; } catch (_) {}`}
+        </Script>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

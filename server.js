@@ -769,6 +769,24 @@ function normalizePastorType(value) {
   return 'Unassigned';
 }
 
+function pastorIdentityKey(name) {
+  return String(name || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function syncPastorTypeAcrossQuarters(db, names, pastorType) {
+  const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
+  const updatedQuarters = new Set();
+  const now = new Date().toISOString();
+  db.quarters.forEach(q => q.entries.forEach(entry => {
+    if (identities.has(pastorIdentityKey(entry.name)) && normalizePastorType(entry.pastorType) !== pastorType) {
+      entry.pastorType = pastorType;
+      entry.updatedAt = now;
+      updatedQuarters.add(q.id);
+    }
+  }));
+  return [...updatedQuarters];
+}
+
 function normalizeEntry(entry) {
   entry.pastorType = normalizePastorType(entry.pastorType);
   entry.hidden = entry.hidden === true;
@@ -917,8 +935,10 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
     const title = `${yr} MISSION SUPPORT ${qNum === 1 ? '1ST' : qNum === 2 ? '2ND' : qNum === 3 ? '3RD' : '4TH'} QUARTER`;
 
     let entries = [];
-    if (copyFromQuarterId) {
-      const sourceQ = db.quarters.find(q => q.id === copyFromQuarterId);
+    const latestQuarterId = db.quarters.slice().sort((a, b) => String(a.id).localeCompare(String(b.id))).at(-1)?.id;
+    const sourceQuarterId = copyFromQuarterId || latestQuarterId;
+    if (sourceQuarterId) {
+      const sourceQ = db.quarters.find(q => q.id === sourceQuarterId);
       if (sourceQ) {
         entries = sourceQ.entries.filter(e => !e.hidden).map((e, idx) => {
           const slots = getEntrySupportSlots(e);
@@ -1004,6 +1024,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
     };
 
     quarter.entries.push(newEntry);
+    syncPastorTypeAcrossQuarters(db, [pastorName], newEntry.pastorType);
     addAudit(db, req, 'Pastor Added', { quarterId: quarter.id, entryId: newEntry.id, pastorName, description: `${pastorName} was added to ${quarter.id}` });
 
     // Optional: add to all active quarters
@@ -1085,13 +1106,20 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
     entry.rawName = `${entry.number}. ${entry.name}`;
     entry.updatedAt = new Date().toISOString();
 
+    let typeUpdatedQuarters = [];
+    if (before.pastorType !== candidate.pastorType) {
+      typeUpdatedQuarters = [...new Set([quarter.id, ...syncPastorTypeAcrossQuarters(db, [before.name, candidate.name], candidate.pastorType)])];
+    }
+
     const supportChanged = changes.some(c => quarter.months?.includes(c.field));
     addAudit(db, req, supportChanged ? 'Support Updated' : (changes.some(c => ['hidden','included'].includes(c.field)) ? (entry.hidden ? 'Pastor Hidden' : 'Pastor Restored') : 'Pastor Edited'), {
       quarterId: quarter.id,
       entryId: entry.id,
       pastorName: entry.name,
       changes,
-      description: `${entry.name} was updated in ${quarter.id}`
+      description: changes.some(change => change.field === 'pastorType')
+        ? `${entry.name}'s pastor type was updated across ${Math.max(1, typeUpdatedQuarters.length)} quarter${typeUpdatedQuarters.length === 1 ? '' : 's'}`
+        : `${entry.name} was updated in ${quarter.id}`
     });
 
     await writeDB(db, { touchLastUpdated: true });
