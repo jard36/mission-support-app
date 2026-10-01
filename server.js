@@ -1392,6 +1392,138 @@ function filtersForQuarter(q, filters = {}) {
   };
 }
 
+function quarterOrderValue(q) {
+  const quarterNumber = Number(String(q.id || '').match(/Q(\d+)/i)?.[1]
+    || String(q.quarterName || '').match(/(\d+)/)?.[1]
+    || 0);
+  return (Number(q.year) || 0) * 10 + quarterNumber;
+}
+
+function compactReportStatus(value) {
+  const text = compactPptStatus(value);
+  if (!text) return '—';
+  const letters = [...text.matchAll(/([A-E])\.\s*(✓)?/gi)];
+  if (letters.length) return letters.map(match => `${match[1].toUpperCase()}${match[2] ? '✓' : '○'}`).join(' ');
+  if (text.includes('✓')) return '✓';
+  return text;
+}
+
+function addConsolidatedIncompleteReport(pptx, quarterList, filters, { SW, centerX, logoPath }) {
+  const quarters = [...quarterList].sort((a, b) => quarterOrderValue(a) - quarterOrderValue(b));
+  const visibleEntriesByQuarter = quarters.map(q => (q.entries || [])
+    .map(normalizeEntry)
+    .filter(entry => !entry.hidden && (!filters.pastorType || filters.pastorType === 'All' || entry.pastorType === filters.pastorType)));
+  const includedPastors = new Set();
+  quarters.forEach(q => {
+    filterQuarterEntries(q, filtersForQuarter(q, filters)).forEach(entry => {
+      const key = pastorIdentityKey(entry.name);
+      if (key) includedPastors.add(key);
+    });
+  });
+
+  const pastors = new Map();
+  visibleEntriesByQuarter.forEach((entries, quarterIndex) => entries.forEach(entry => {
+    const key = pastorIdentityKey(entry.name);
+    if (!key || !includedPastors.has(key)) return;
+    if (!pastors.has(key)) {
+      pastors.set(key, {
+        name: entry.name,
+        number: Number(entry.number) || Number.MAX_SAFE_INTEGER,
+        quarters: quarters.map(() => []),
+      });
+    }
+    pastors.get(key).quarters[quarterIndex].push(entry);
+  }));
+
+  const orderedPastors = [...pastors.values()].sort((a, b) => a.number - b.number || a.name.localeCompare(b.name));
+  const rangeLabel = quarters.length && quarters.every(q => Number(q.year) === Number(quarters[0].year))
+    ? `${quarters[0].year} Mission Support Report`
+    : 'Mission Support Report';
+  const selectedLabel = quarters.map(q => `${q.year} ${q.quarterName}`).join(' • ');
+  const coverSlide = pptx.addSlide();
+  coverSlide.background = { color: '2D1B4E' };
+  if (logoPath) coverSlide.addImage({ path: logoPath, x: centerX(1.98), y: 0.58, w: 1.98, h: 1.98 });
+  coverSlide.addText('LIVING HOPE BAPTIST CHURCH', {
+    x: 0, y: 2.72, w: SW, h: 0.42,
+    fontSize: 18, bold: true, color: 'DDD6FE', align: 'center', valign: 'mid', fit: 'shrink'
+  });
+  coverSlide.addText('Managok, Malaybalay City', {
+    x: 0, y: 3.12, w: SW, h: 0.32,
+    fontSize: 13, color: 'A78BFA', align: 'center', valign: 'mid'
+  });
+  coverSlide.addText(rangeLabel, {
+    x: 0.35, y: 4.05, w: SW - 0.7, h: 0.85,
+    fontSize: 30, bold: true, color: 'FFFFFF', align: 'center', valign: 'mid', fit: 'shrink', margin: 0.02
+  });
+  coverSlide.addText('INCOMPLETE ONLY  •  ONE ROW PER PASTOR', {
+    x: 0.35, y: 5.04, w: SW - 0.7, h: 0.34,
+    fontSize: 13, bold: true, color: 'C4B5FD', align: 'center', valign: 'mid', fit: 'shrink'
+  });
+  coverSlide.addText(selectedLabel, {
+    x: 0.65, y: 5.48, w: SW - 1.3, h: 0.55,
+    fontSize: 11, color: 'DDD6FE', align: 'center', valign: 'mid', fit: 'shrink'
+  });
+
+  const tableWidth = 12.133;
+  const pastorColWidth = Math.min(2.55, tableWidth * 0.28);
+  const quarterColWidth = (tableWidth - pastorColWidth) / quarters.length;
+  const chunkSize = 8;
+  for (let offset = 0; offset < orderedPastors.length; offset += chunkSize) {
+    const chunk = orderedPastors.slice(offset, offset + chunkSize);
+    const slide = pptx.addSlide();
+    slide.background = { color: '26143F' };
+    slide.addText('INCOMPLETE SUPPORT RECORDS', {
+      x: 0.55, y: 0.25, w: 12.233, h: 0.48,
+      fontSize: 22, bold: true, color: 'FFFFFF', align: 'center', valign: 'mid', fit: 'shrink'
+    });
+    slide.addText(`${selectedLabel}  •  ${orderedPastors.length} unique pastors`, {
+      x: 0.55, y: 0.78, w: 12.233, h: 0.28,
+      fontSize: 10, color: 'C4B5FD', align: 'center', valign: 'mid', fit: 'shrink'
+    });
+
+    const header = [
+      { text: 'PASTOR / MISSIONARY', options: { bold: true, fill: { color: '4C1D95' }, color: 'FFFFFF', align: 'center', valign: 'middle', fontSize: 12, fit: 'shrink' } },
+      ...quarters.map(q => ({
+        text: `${q.year} ${q.quarterName}`,
+        options: { bold: true, fill: { color: '4C1D95' }, color: 'FFFFFF', align: 'center', valign: 'middle', fontSize: 12, fit: 'shrink' }
+      }))
+    ];
+    const tableData = [header];
+    chunk.forEach(pastor => {
+      const label = `${pastor.number < Number.MAX_SAFE_INTEGER ? `${pastor.number}. ` : ''}${pastor.name}`;
+      const quarterCells = pastor.quarters.map((entries, quarterIndex) => {
+        const months = quarters[quarterIndex].months || ['Month 1', 'Month 2', 'Month 3'];
+        const lines = months.slice(0, 3).map((month, monthIndex) => {
+          const values = [...new Set(entries.map(entry => compactReportStatus(entry[`m${monthIndex + 1}`])))];
+          return `${String(month || `M${monthIndex + 1}`).slice(0, 3).toUpperCase()}: ${values.length ? values.join(' / ') : '—'}`;
+        });
+        return {
+          text: lines.join('\n'),
+          options: { fontSize: quarters.length >= 4 ? 8 : 10, color: 'FFFFFF', fill: { color: '26143F' }, align: 'left', valign: 'middle', fit: 'shrink', margin: 0.05 }
+        };
+      });
+      tableData.push([
+        { text: label, options: { fontSize: 13, color: 'FFFFFF', fill: { color: '26143F' }, bold: true, align: 'left', valign: 'middle', fit: 'shrink', margin: 0.08 } },
+        ...quarterCells
+      ]);
+    });
+
+    slide.addTable(tableData, {
+      x: centerX(tableWidth), y: 1.22, w: tableWidth,
+      colW: [pastorColWidth, ...quarters.map(() => quarterColWidth)],
+      rowH: [0.58, ...chunk.map(() => 0.64)],
+      border: { pt: 1, color: '7C3AED' },
+      margin: 0.04,
+      autoFit: false
+    });
+    slide.addText(`Pastors ${offset + 1}–${offset + chunk.length} of ${orderedPastors.length}`, {
+      x: 0.6, y: 7.0, w: 12.133, h: 0.22,
+      fontSize: 9, color: 'A78BFA', align: 'right', valign: 'mid'
+    });
+  }
+  return pptx;
+}
+
 async function buildPptx(quarterList, filters = {}) {
   const pptx = new pptxgen();
   // Explicit 16:9 PowerPoint canvas: 13.333 x 7.5 inches.
@@ -1412,6 +1544,9 @@ async function buildPptx(quarterList, filters = {}) {
     path.join(process.cwd(), 'public', 'images', 'logo.png'),
     path.join(__dirname, 'public', 'images', 'logo.png'),
   ].find((candidate) => fs.existsSync(candidate));
+  if (quarterList.length > 1 && filters.statusFilter === 'Incomplete Only') {
+    return addConsolidatedIncompleteReport(pptx, quarterList, filters, { SW, centerX, logoPath });
+  }
   const MARGIN = 0.85;
   const CONTENT_W = SW - (MARGIN * 2);
 
