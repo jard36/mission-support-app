@@ -305,7 +305,7 @@ function applyRoleUi() {
   if (quarterControl) quarterControl.style.display = '';
   if (yearControl) yearControl.style.display = '';
   if (searchControl) searchControl.style.display = supporter ? 'none' : '';
-  ['btn-present','btn-download-pptx','btn-bulk-check-all','btn-bulk-clear-all','btn-exit-report','btn-add-pastor','btn-quick-save','btn-save-changes','btn-discard-changes','month-bulk-bar'].forEach(id => {
+  ['btn-present','btn-bulk-check-all','btn-bulk-clear-all','btn-exit-report','btn-add-pastor','btn-quick-save','btn-save-changes','btn-discard-changes','month-bulk-bar'].forEach(id => {
     const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
   });
   const toolbarTitle = document.getElementById('table-header-title');
@@ -486,20 +486,6 @@ function setupEventListeners() {
   document.getElementById('btn-pending-update')?.addEventListener('click', savePendingChanges);
   document.getElementById('btn-pending-cancel')?.addEventListener('click', discardPendingChanges);
   document.getElementById('btn-pending-close')?.addEventListener('click', discardPendingChanges);
-
-  // Download PPTX triggers
-  document.getElementById('btn-download-pptx').addEventListener('click', () => {
-    if (state.reportMode && state.reportQuarters.length) {
-      downloadReportPptx();
-    } else if (state.allMode) {
-      showToast('Preparing complete all-quarters PowerPoint presentation...', 'info');
-      downloadPptxFile(`/api/export/pptx-all?pastorType=${encodeURIComponent(state.pastorTypeFilter)}&statusFilter=${encodeURIComponent(state.statusFilter)}`);
-    } else if (state.currentQuarter) {
-      showToast('Preparing PowerPoint presentation for download...', 'info');
-      const qs = new URLSearchParams({ pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter });
-      downloadPptxFile(`/api/export/pptx/${encodeURIComponent(state.currentQuarter.id)}?${qs.toString()}`);
-    }
-  });
 
   document.getElementById('action-download-all').addEventListener('click', (e) => {
     e.preventDefault();

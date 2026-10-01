@@ -787,6 +787,19 @@ function syncPastorTypeAcrossQuarters(db, names, pastorType) {
   return [...updatedQuarters];
 }
 
+function pastorTypeForNewOccurrence(db, pastorName, requestedType) {
+  const normalizedRequested = normalizePastorType(requestedType);
+  if (normalizedRequested !== 'Unassigned') return normalizedRequested;
+  const identity = pastorIdentityKey(pastorName);
+  const mostRecentKnownType = db.quarters
+    .slice()
+    .sort((a, b) => quarterOrderValue(b) - quarterOrderValue(a))
+    .flatMap(q => q.entries || [])
+    .find(entry => pastorIdentityKey(entry.name) === identity
+      && ['Local', 'Foreign'].includes(normalizePastorType(entry.pastorType)));
+  return mostRecentKnownType ? normalizePastorType(mostRecentKnownType.pastorType) : normalizedRequested;
+}
+
 async function sendPptxDownload(res, pptx, filename) {
   // PptxGenJS only applies compression to its STREAM output type in Node;
   // nodebuffer currently ignores the compression option and makes large files.
@@ -1019,6 +1032,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
     const pastorName = name.trim();
+    const effectivePastorType = pastorTypeForNewOccurrence(db, pastorName, pastorType);
     const maxNumber = quarter.entries.reduce((max, e) => Math.max(max, Number(e.number) || 0), 0);
     const num = number ? parseInt(number) : (maxNumber + 1);
 
@@ -1032,13 +1046,13 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
       m2: m2 || '',
       m3: m3 || '',
       notes: notes || '',
-      pastorType: normalizePastorType(pastorType),
+      pastorType: effectivePastorType,
       hidden: false,
       updatedAt: now
     };
 
     quarter.entries.push(newEntry);
-    syncPastorTypeAcrossQuarters(db, [pastorName], newEntry.pastorType);
+    syncPastorTypeAcrossQuarters(db, [pastorName], effectivePastorType);
     addAudit(db, req, 'Pastor Added', { quarterId: quarter.id, entryId: newEntry.id, pastorName, description: `${pastorName} was added to ${quarter.id}` });
 
     // Optional: add to all active quarters
@@ -1055,7 +1069,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
             m2: '',
             m3: '',
             notes: '',
-            pastorType: normalizePastorType(pastorType),
+            pastorType: effectivePastorType,
             hidden: false,
             updatedAt: now
           });

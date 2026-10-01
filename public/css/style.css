@@ -2149,12 +2149,19 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   color:var(--text-main);
 }
 :root[data-theme="light"] .user-card-v2 {
-  background:linear-gradient(135deg,#fff 0%,#f7f4fa 100%);
+  background:#fff !important;
   border-color:#d9d0e2;
+}
+:root[data-theme="light"] .user-card-identity {
+  background:#fff !important;
+  color:#30263d;
+  border-radius:var(--radius-sm);
 }
 :root[data-theme="light"] .user-card-identity,
 :root[data-theme="light"] .user-contact-list,
 :root[data-theme="light"] .user-username { color:#51485d; }
+:root[data-theme="light"] .user-card-identity .user-name-line strong { color:#241b30; }
+:root[data-theme="light"] .user-card-identity .user-contact-list i { color:#685b78; }
 :root[data-theme="light"] .user-name-line strong,
 :root[data-theme="light"] .user-status-card strong,
 :root[data-theme="light"] .user-detail-chip strong { color:#30263d; }
@@ -2188,7 +2195,7 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 :root[data-theme="light"] .user-role-badge,
 :root[data-theme="light"] .user-role-badge.role-staff { color:#604487; }
 :root[data-theme="light"] .user-role-badge.role-admin { color:#285787; }
-:root[data-theme="light"] .user-role-badge.role-supporter { color:#087d5b; }
+:root[data-theme="light"] .user-role-badge.role-supporter { color:#087d5b; background:rgba(8,125,91,.1); }
 :root[data-theme="light"] .assignment-type-badge.local,
 :root[data-theme="light"] .pastor-type-badge.type-local { color:#087d5b; }
 :root[data-theme="light"] .assignment-slot-help i,
