@@ -672,6 +672,16 @@ function ensureAssignmentModal(){
   modal.querySelector('#assign-pastor-close').onclick=closeAssignmentModal;
   modal.querySelector('#assign-pastor-cancel').onclick=closeAssignmentModal;
   modal.querySelector('.modal-backdrop').onclick=closeAssignmentModal;
+  modal.addEventListener('click', event=>{
+    const slotButton=event.target.closest('.assignment-slot-check');
+    if(!slotButton||!modal.contains(slotButton))return;
+    event.preventDefault();
+    event.stopPropagation();
+    if(slotButton.disabled)return;
+    const key=slotButton.dataset.assignmentKey;
+    if(assignmentSelected.has(key))assignmentSelected.delete(key);else assignmentSelected.add(key);
+    syncAssignmentSelectionUI();
+  });
   modal.querySelector('#assign-pastor-search').addEventListener('input',renderAssignmentOptions);
   modal.querySelector('#assign-pastor-sort').addEventListener('change',renderAssignmentOptions);
   modal.querySelectorAll('.assignment-type-tab').forEach(btn=>btn.addEventListener('click',()=>{modal.querySelectorAll('.assignment-type-tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');renderAssignmentOptions();}));
@@ -730,7 +740,7 @@ function renderAssignmentOptions(){
       const selected=assignmentSelected.has(key);
       const takenBy=taken.get(base)?.get(label);
       const disabled=!!takenBy && !selected;
-      return `<label class="assignment-slot-check ${selected?'is-selected':''} ${disabled?'is-taken':''}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}"><input type="checkbox" class="assignment-slot-input" value="${escapeHtml(key)}" ${selected?'checked':''} ${disabled?'disabled':''}><span class="assignment-check assignment-slot-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span><span class="assignment-slot-letter">${escapeHtml(label)}</span></label>`;
+      return `<button type="button" class="assignment-slot-check ${selected?'is-selected':''} ${disabled?'is-taken':''}" data-assignment-key="${escapeHtml(key)}" aria-pressed="${selected?'true':'false'}" aria-label="${escapeHtml(`Support slot ${label} for ${p.name}${selected?' selected':''}`)}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}" ${disabled?'disabled':''}><span class="assignment-check assignment-slot-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span><span class="assignment-slot-letter">${escapeHtml(label)}</span></button>`;
     }).join('') : '';
 
     return `<article class="assignment-option assignment-pastor-row ${allSelected?'is-selected':''} ${partiallySelected?'is-partial':''}">
@@ -758,11 +768,6 @@ function renderAssignmentOptions(){
     syncAssignmentSelectionUI();
   }));
 
-  modal.querySelectorAll('#assign-pastor-options .assignment-slot-input').forEach(input=>input.addEventListener('change',()=>{
-    if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);
-    syncAssignmentSelectionUI();
-  }));
-
   syncAssignmentSelectionUI();
 }
 
@@ -785,9 +790,10 @@ function syncAssignmentSelectionUI(){
     parentInput.disabled=available.length===0&&selected.length===0;
     row.classList.toggle('is-selected',allSelected);
     row.classList.toggle('is-partial',partial);
-    row.querySelectorAll('.assignment-slot-input').forEach(input=>{
-      input.checked=assignmentSelected.has(input.value);
-      input.closest('.assignment-slot-check')?.classList.toggle('is-selected',input.checked);
+    row.querySelectorAll('.assignment-slot-check[data-assignment-key]').forEach(button=>{
+      const isSelected=assignmentSelected.has(button.dataset.assignmentKey);
+      button.setAttribute('aria-pressed',String(isSelected));
+      button.classList.toggle('is-selected',isSelected);
     });
   });
 }

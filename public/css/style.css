@@ -2023,8 +2023,10 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   gap:12px;
   flex-wrap:wrap;
 }
-.assignment-slot-check { min-width:36px; height:34px; color:var(--text-muted); font-size:.72rem; font-weight:800; }
-.assignment-slot-check.is-taken { opacity:.42; cursor:not-allowed; }
+.assignment-slot-check { appearance:none; min-width:36px; height:34px; border:0; padding:0; background:transparent; color:var(--text-muted); font-family:inherit; font-size:.72rem; font-weight:800; }
+.assignment-slot-check.is-selected .assignment-slot-box { background:#7c3aed; border-color:#8b5cf6; color:#fff; }
+.assignment-slot-check.is-taken,
+.assignment-slot-check:disabled { opacity:.42; cursor:not-allowed; }
 .assignment-slot-check.is-taken .assignment-slot-box { cursor:not-allowed; }
 .assignment-slot-letter { line-height:1; min-width:10px; }
 .assignment-slot-help {
