@@ -69,11 +69,17 @@ const signupModal = document.getElementById('signup-modal');
 const userManagementModal = document.getElementById('user-management-modal');
 
 // --- Initialization ---
-document.addEventListener('DOMContentLoaded', async () => {
+async function initializeMissionSupportApp() {
   document.body.classList.add('auth-locked');
   setupAuthListeners();
   await checkAuthSession();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeMissionSupportApp, { once: true });
+} else {
+  initializeMissionSupportApp();
+}
 
 function setupAuthListeners() {
   const form = document.getElementById('login-form');
@@ -610,12 +616,17 @@ function renderUserManagement(){
   }).join('');
 }
 function parseSupportSlotsFromPastor(entry){
+  // The mission-support table is the source of truth for supporter slots.
+  // A pastor may have A/B/C/D/E/... slots, and a slot can be empty but still
+  // valid (for example: "A. ✓ B.  C."). Read every month column so the
+  // assignment modal reflects all slots recorded for that pastor.
   const slots=new Set();
   ['m1','m2','m3'].forEach(key=>{
     const value=String(entry?.[key]||'');
-    for(const match of value.matchAll(/([A-E])\s*\./gi)) slots.add(match[1].toUpperCase());
+    const matches=value.matchAll(/\b([A-Z])\s*(?:[.:)]|(?=\s*(?:✓|$)))/gi);
+    for(const match of matches) slots.add(match[1].toUpperCase());
   });
-  return [...slots].sort();
+  return [...slots].sort((a,b)=>a.localeCompare(b));
 }
 function assignmentKey(p){
   return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}::${String(p.slot||'').trim().toUpperCase()}`;
@@ -638,13 +649,15 @@ function getTakenAssignmentSlots(){
 }
 async function getPastorChoices(){
   const res=await fetch('/api/quarters'); const data=await res.json(); if(!res.ok)throw new Error(data.error||'Unable to load pastors');
-  const latest=data.quarters?.[data.quarters.length-1]; if(!latest) return [];
+  const latest=[...(data.quarters||[])].sort((a,b)=>Number(b.year||0)-Number(a.year||0)||Number(b.quarterNum||0)-Number(a.quarterNum||0))[0]; if(!latest) return [];
   const qr=await fetch(`/api/quarters/${latest.id}`); const q=await qr.json(); if(!qr.ok)throw new Error(q.error||'Unable to load pastors');
   const seen=new Map();
   (q.entries||[]).filter(p=>!p.hidden).forEach(p=>{
     const key=pastorBaseKey(p);
     if(seen.has(key)) return;
     const supportSlots=parseSupportSlotsFromPastor(p);
+    // Keep an unlabelled assignment option when no slot letters exist so
+    // select-all and individual assignment behave consistently.
     seen.set(key,{...p,supportSlots:supportSlots.length?supportSlots:['']});
   });
   return [...seen.values()];
@@ -724,7 +737,7 @@ function renderAssignmentOptions(){
         <span class="assignment-check assignment-pastor-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span>
       </label>
       <div class="assignment-option-number">${escapeHtml(String(p.number||''))}</div>
-      <div class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor')} · ${slots.length} supporter slot${slots.length===1?'':'s'}</small></div>
+      <div class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor')}${slots.length ? ` · ${slots.length} supporter slot${slots.length===1?'':'s'}` : ''}</small></div>
       <div class="assignment-slots">${slotHtml}</div>
     </article>`;
   }).join(''):'<div class="audit-empty">No pastors found.</div>';

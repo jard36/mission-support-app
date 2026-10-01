@@ -1,51 +1,34 @@
-# Deploy Mission Support Tracker to Vercel + Neon
+# Deploy Mission Support Tracker (Next.js) to Vercel + Neon
 
-This version is prepared for Vercel with Neon Postgres. The existing JSON file remains as the local fallback and as the seed data for a new Neon database.
+The Next.js App Router serves the existing interface and static assets. Its catch-all API route forwards `/api/*` requests to the existing Express app in `server.js`, preserving the current authentication, database, reports, PowerPoint exports, and notification routes.
 
-## What changed
-
-- Local development still works with `data/mission_support_db.json` when `DATABASE_URL` is not set.
-- When `DATABASE_URL` is set, the app automatically creates a small Postgres table and imports the current JSON data on first use.
-- All existing quarter/pastor/status/audit/PPT endpoints use the same API, so the frontend does not need a rewrite.
-- Vercel's current Express support can detect and run this app with zero configuration; no `vercel.json` routing file is needed.
+The JSON database remains the local fallback and seed data for a new Neon database.
 
 ## Deploy
 
-1. Upload/push this project to GitHub. Keep `server.js` and `package.json` at the repository root.
-2. In Vercel, create a new project from that GitHub repository. Leave **Framework Preset** as `Other` if Vercel does not auto-label Express; leave Build/Output/Install commands at their defaults.
-3. Add the **Neon** integration/storage from the Vercel Marketplace and connect it to this project.
-4. Make sure `DATABASE_URL` is available to the project (Vercel/Neon normally provisions this for you).
+1. Push this project to GitHub.
+2. In Vercel, create or update the project from that repository. Set **Framework Preset** to **Next.js** and keep the default build and output settings.
+3. Add the Neon integration/storage and connect it to this project.
+4. Ensure `DATABASE_URL` is available in the Vercel environment.
 5. Deploy.
-6. Open the deployed URL on your Android phone or iPad.
-7. Visit `/api/health` on the deployed URL. It should report:
-   - `ok: true`
-   - `database: "neon-postgres"`
-   - `quarters: 14` on the first deployment with the included seed data.
+6. Visit `/api/health` on the deployed URL. It should report `ok: true`, `database: "neon-postgres"`, and 14 quarters when the included seed data is used.
 
-## Local test with Neon
+The daily Vercel Cron schedule for `/api/notifications/cron` remains configured in `vercel.json` (00:00 UTC / 08:00 Philippines time).
 
-After connecting Neon, add the database URL to your local environment as `DATABASE_URL`, then run:
+## Local development
 
-```bash
-npm install
-npm start
-```
+Run `npm install`, then `npm run dev`, and open [http://localhost:3000](http://localhost:3000). Without `DATABASE_URL`, the app uses `data/mission_support_db.json`.
 
-If `DATABASE_URL` is absent, the app intentionally uses the local JSON database.
+For a production-style local run, use `npm run build` followed by `npm start`.
 
-## Important
+## Environment variables
 
-Do not commit a real `DATABASE_URL` or database password to GitHub. Put it in Vercel Environment Variables (and a local `.env` file only if needed). `.env` files are ignored by the project.
+Do not commit these values to GitHub. Set them in Vercel Project Settings → Environment Variables, or use a local `.env` file (which is ignored by Git).
 
-## Reminder / Notification environment variables
+- `DATABASE_URL` — Neon Postgres connection string.
+- `RESEND_API_KEY` — Resend API key.
+- `RESEND_FROM_EMAIL` — verified sender address.
+- `IPROG_SMS_API_TOKEN` — IPROG SMS API token.
+- `CRON_SECRET` — secret used to protect the scheduled reminder endpoint.
 
-For Email + SMS reminders, add these in Vercel Project Settings → Environment Variables:
-
-- `RESEND_API_KEY` — your Resend API key.
-- `RESEND_FROM_EMAIL` — a verified Resend sender address. `onboarding@resend.dev` is suitable only for development/testing where Resend permits it.
-- `IPROG_SMS_API_TOKEN` — your IPROG SMS API token.
-- `CRON_SECRET` — a private random secret used to protect the scheduled reminder endpoint.
-
-The scheduled reminder endpoint is `/api/notifications/cron`. Vercel Cron is configured to check it daily at 00:00 UTC (08:00 Philippines time). The reminder settings determine whether a monthly or quarterly reminder is due that day.
-
-Never put any of these values in frontend JavaScript or commit a real `.env` file to GitHub.
+The reminder settings determine whether a monthly or quarterly reminder is due on the daily cron check.

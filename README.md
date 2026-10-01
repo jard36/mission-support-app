@@ -16,13 +16,21 @@ Usa ka moderno ug sayon gamiton nga CRUD Web Application para sa pagdumala sa Mi
 5. **Purple Theme UI**:
  - Nindot ug elegante nga purple color palette (#2D1B4E, #4C1D95, #7C3AED).
 
-## Unsaon Pagpadagan:
-- I-double click lang ang \start_app.bat\, o ipadagan kini sa terminal:
- \\\ash
- node server.js
- \\\
-- Ablihi ang browser sa: [http://localhost:3000](http://localhost:3000)
+## Development with Next.js
 
+- Install dependencies with `npm install`.
+- Start the development server with `npm run dev`, or double-click `start_app.bat`.
+- Open [http://localhost:3000](http://localhost:3000).
+- Create a production build with `npm run build`, then start it with `npm start`.
+
+The existing interface is served through the Next.js App Router. The original Express API routes, authentication, database layer, PowerPoint exports, and reminder behavior remain in place behind the Next.js API route handler.
+
+## Project structure
+
+- `app/` contains the Next.js App Router page, root layout, and API route adapter.
+- `public/` contains the existing styles, images, and browser application script.
+- `server.js` keeps the existing Express API and business logic.
+- `db.js` keeps the local JSON and Neon database implementation.
 
 ## Latest updates
 

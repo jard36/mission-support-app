@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const DB_PATH = path.join(__dirname, 'data', 'mission_support_db.json');
-const BACKUP_PATH = path.join(__dirname, 'data', 'mission_support_db.backup.json');
+const DATA_DIR = process.env.MISSION_SUPPORT_DATA_DIR || path.join(process.cwd(), 'data');
+const DB_PATH = path.join(DATA_DIR, 'mission_support_db.json');
+const BACKUP_PATH = path.join(DATA_DIR, 'mission_support_db.backup.json');
 
 let sql = null;
 let dbReady = false;
