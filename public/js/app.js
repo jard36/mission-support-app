@@ -673,13 +673,25 @@ function ensureAssignmentModal(){
   modal.querySelector('#assign-pastor-cancel').onclick=closeAssignmentModal;
   modal.querySelector('.modal-backdrop').onclick=closeAssignmentModal;
   modal.addEventListener('click', event=>{
-    const slotButton=event.target.closest('.assignment-slot-check');
-    if(!slotButton||!modal.contains(slotButton))return;
-    event.preventDefault();
     event.stopPropagation();
-    if(slotButton.disabled)return;
-    const key=slotButton.dataset.assignmentKey;
-    if(assignmentSelected.has(key))assignmentSelected.delete(key);else assignmentSelected.add(key);
+    const toggle=event.target.closest('.assignment-slot-check, .assignment-pastor-toggle');
+    if(!toggle||!modal.contains(toggle))return;
+    event.preventDefault();
+    if(toggle.disabled)return;
+    if(toggle.matches('.assignment-slot-check')){
+      const key=toggle.dataset.assignmentKey;
+      if(assignmentSelected.has(key))assignmentSelected.delete(key);else assignmentSelected.add(key);
+    }else{
+      const pastor=assignmentPastors.find(item=>pastorBaseKey(item)===toggle.dataset.pastorBase);
+      if(!pastor)return;
+      const slots=(pastor.supportSlots&&pastor.supportSlots.length)?pastor.supportSlots:[''];
+      const available=slots.filter(slot=>!isAssignmentSlotTaken(pastor,slot));
+      const allSelected=available.length>0&&available.every(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
+      available.forEach(slot=>{
+        const key=assignmentKey({...pastor,slot});
+        if(allSelected)assignmentSelected.delete(key);else assignmentSelected.add(key);
+      });
+    }
     syncAssignmentSelectionUI();
   });
   modal.querySelector('#assign-pastor-search').addEventListener('input',renderAssignmentOptions);
@@ -740,33 +752,18 @@ function renderAssignmentOptions(){
       const selected=assignmentSelected.has(key);
       const takenBy=taken.get(base)?.get(label);
       const disabled=!!takenBy && !selected;
-      return `<button type="button" class="assignment-slot-check ${selected?'is-selected':''} ${disabled?'is-taken':''}" data-assignment-key="${escapeHtml(key)}" aria-pressed="${selected?'true':'false'}" aria-label="${escapeHtml(`Support slot ${label} for ${p.name}${selected?' selected':''}`)}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}" ${disabled?'disabled':''}><span class="assignment-check assignment-slot-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span><span class="assignment-slot-letter">${escapeHtml(label)}</span></button>`;
+      return `<button type="button" class="assignment-slot-check ${selected?'is-selected':''} ${disabled?'is-taken':''}" data-assignment-key="${escapeHtml(key)}" role="checkbox" aria-checked="${selected?'true':'false'}" aria-label="${escapeHtml(`Support slot ${label} for ${p.name}`)}" title="${escapeHtml(disabled?`Assigned to ${takenBy}`:`Assign supporter slot ${label}`)}" ${disabled?'disabled':''}><span class="assignment-check assignment-slot-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span><span class="assignment-slot-letter">${escapeHtml(label)}</span></button>`;
     }).join('') : '';
 
     return `<article class="assignment-option assignment-pastor-row ${allSelected?'is-selected':''} ${partiallySelected?'is-partial':''}">
-      <label class="assignment-pastor-check" title="${escapeHtml(parentTitle)}">
-        <input type="checkbox" class="assignment-pastor-input" data-pastor-base="${escapeHtml(base)}" ${allSelected?'checked':''} ${parentDisabled?'disabled':''}>
+      <button type="button" class="assignment-pastor-toggle" data-pastor-base="${escapeHtml(base)}" role="checkbox" aria-checked="${allSelected?'true':partiallySelected?'mixed':'false'}" aria-label="${escapeHtml(parentTitle)} ${escapeHtml(p.name||'')}" title="${escapeHtml(parentTitle)}" ${parentDisabled?'disabled':''}>
         <span class="assignment-check assignment-pastor-box" aria-hidden="true"><i class="fa-solid fa-check"></i></span>
-      </label>
+      </button>
       <div class="assignment-option-number">${escapeHtml(String(p.number||''))}</div>
       <div class="assignment-option-copy"><strong>${escapeHtml(p.name||'')}</strong><small>${type==='Foreign'?'Foreign Pastor':(type==='Local'?'Local Pastor':'Pastor')}${slots.length ? ` · ${slots.length} supporter slot${slots.length===1?'':'s'}` : ''}</small></div>
       <div class="assignment-slots">${slotHtml}</div>
     </article>`;
   }).join(''):'<div class="audit-empty">No pastors found.</div>';
-
-  modal.querySelectorAll('#assign-pastor-options .assignment-pastor-input').forEach(input=>input.addEventListener('change',()=>{
-    const base=input.dataset.pastorBase;
-    const pastor=assignmentPastors.find(p=>pastorBaseKey(p)===base);
-    if(!pastor)return;
-    const slots=(pastor.supportSlots&&pastor.supportSlots.length)?pastor.supportSlots:[''];
-    const available=slots.filter(slot=>!isAssignmentSlotTaken(pastor,slot));
-    if(input.checked){
-      available.forEach(slot=>assignmentSelected.add(assignmentKey({...pastor,slot})));
-    }else{
-      available.forEach(slot=>assignmentSelected.delete(assignmentKey({...pastor,slot})));
-    }
-    syncAssignmentSelectionUI();
-  }));
 
   syncAssignmentSelectionUI();
 }
@@ -776,23 +773,24 @@ function syncAssignmentSelectionUI(){
   if(!modal)return;
   modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} slot${assignmentSelected.size===1?'':'s'} selected`;
   modal.querySelectorAll('#assign-pastor-options .assignment-pastor-row').forEach(row=>{
-    const parentInput=row.querySelector('.assignment-pastor-input');
-    const base=parentInput?.dataset.pastorBase;
+    const parentToggle=row.querySelector('.assignment-pastor-toggle');
+    const base=parentToggle?.dataset.pastorBase;
     const pastor=assignmentPastors.find(item=>pastorBaseKey(item)===base);
-    if(!parentInput||!pastor)return;
+    if(!parentToggle||!pastor)return;
     const slots=(pastor.supportSlots&&pastor.supportSlots.length)?pastor.supportSlots:[''];
     const selected=slots.filter(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
     const available=slots.filter(slot=>!isAssignmentSlotTaken(pastor,slot));
     const allSelected=available.length>0&&available.every(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
     const partial=selected.length>0&&!allSelected;
-    parentInput.checked=allSelected;
-    parentInput.indeterminate=partial;
-    parentInput.disabled=available.length===0&&selected.length===0;
+    parentToggle.setAttribute('aria-checked',allSelected?'true':partial?'mixed':'false');
+    parentToggle.disabled=available.length===0&&selected.length===0;
+    parentToggle.title=allSelected?'Clear all available supporter slots':'Select all available supporter slots';
+    parentToggle.setAttribute('aria-label',`${parentToggle.title} for ${pastor.name||'pastor'}`);
     row.classList.toggle('is-selected',allSelected);
     row.classList.toggle('is-partial',partial);
     row.querySelectorAll('.assignment-slot-check[data-assignment-key]').forEach(button=>{
       const isSelected=assignmentSelected.has(button.dataset.assignmentKey);
-      button.setAttribute('aria-pressed',String(isSelected));
+      button.setAttribute('aria-checked',String(isSelected));
       button.classList.toggle('is-selected',isSelected);
     });
   });

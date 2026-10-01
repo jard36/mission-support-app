@@ -1819,7 +1819,6 @@ body {
 .assignment-option { display:grid; grid-template-columns:24px 34px minmax(0,1fr) auto; align-items:center; gap:11px; min-height:58px; padding:8px 10px; border:1px solid rgba(139,92,246,.14); border-radius:12px; background:rgba(30,20,48,.45); cursor:pointer; transition:.18s ease; }
 .assignment-option:hover { border-color:rgba(139,92,246,.38); background:rgba(67,42,96,.34); }
 .assignment-option.is-selected { border-color:rgba(139,92,246,.55); background:rgba(124,58,237,.13); }
-.assignment-option input { position:absolute; opacity:0; pointer-events:none; }
 .assignment-check { width:22px; height:22px; border-radius:6px; border:2px solid #766b83; display:flex; align-items:center; justify-content:center; color:transparent; background:transparent; transition:.15s; }
 .assignment-option.is-selected .assignment-check { background:#7c3aed; border-color:#8b5cf6; color:#fff; }
 .assignment-check i { font-size:11px; }
@@ -1963,7 +1962,7 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   min-height: 70px;
 }
 .assignment-pastor-row:hover { cursor: default; }
-.assignment-pastor-check,
+.assignment-pastor-toggle,
 .assignment-slot-check {
   display:inline-flex;
   align-items:center;
@@ -1971,9 +1970,9 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   gap:7px;
   cursor:pointer;
 }
-.assignment-pastor-check { width:26px; height:26px; }
-.assignment-pastor-input,
-.assignment-slot-input { position:absolute; opacity:0; pointer-events:none; }
+.assignment-pastor-toggle { appearance:none; width:26px; height:26px; border:0; padding:0; background:transparent; }
+.assignment-pastor-toggle:focus-visible,
+.assignment-slot-check:focus-visible { outline:2px solid #c4b5fd; outline-offset:3px; border-radius:7px; }
 .assignment-pastor-box,
 .assignment-slot-box {
   width:22px;
@@ -1990,19 +1989,14 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 }
 .assignment-pastor-box i,
 .assignment-slot-box i { font-size:10px; }
-.assignment-pastor-check:hover .assignment-pastor-box,
+.assignment-pastor-toggle:hover:not(:disabled) .assignment-pastor-box,
 .assignment-slot-check:hover:not(.is-taken) .assignment-slot-box {
   border-color:#a78bfa;
   background:rgba(124,58,237,.12);
 }
-.assignment-pastor-input:checked + .assignment-pastor-box,
-.assignment-pastor-input:indeterminate + .assignment-pastor-box,
-.assignment-slot-input:checked + .assignment-slot-box {
-  background:#7c3aed;
-  border-color:#8b5cf6;
-  color:#fff;
-}
-.assignment-pastor-input:indeterminate + .assignment-pastor-box::after {
+.assignment-pastor-row.is-partial .assignment-pastor-box { border-color:#8b5cf6; }
+.assignment-pastor-row.is-partial .assignment-pastor-box i { display:none; }
+.assignment-pastor-row.is-partial .assignment-pastor-box::after {
   content:'';
   width:9px;
   height:2px;
@@ -2011,7 +2005,7 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 }
 .assignment-pastor-row.is-selected { border-color:rgba(139,92,246,.55); background:rgba(124,58,237,.13); }
 .assignment-pastor-row.is-partial { border-color:rgba(139,92,246,.34); background:rgba(124,58,237,.07); }
-.assignment-pastor-input:disabled + .assignment-pastor-box { opacity:.4; cursor:not-allowed; }
+.assignment-pastor-toggle:disabled { opacity:.4; cursor:not-allowed; }
 .assignment-option-number { color:var(--text-subtle); font-size:.72rem; font-weight:700; text-align:right; }
 .assignment-option-copy { display:flex; flex-direction:column; min-width:0; gap:3px; }
 .assignment-option-copy strong { color:var(--text-main); font-size:.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
