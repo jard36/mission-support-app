@@ -1406,7 +1406,12 @@ async function buildPptx(quarterList, filters = {}) {
   pptx.company = 'Living Hope Baptist Church';
   pptx.lang = 'en-US';
 
-  const logoPath = path.join(__dirname, 'public', 'images', 'logo.png');
+  // __dirname can point at a bundled Next.js server chunk in production.
+  // Check the deployment root first, then the source-relative path.
+  const logoPath = [
+    path.join(process.cwd(), 'public', 'images', 'logo.png'),
+    path.join(__dirname, 'public', 'images', 'logo.png'),
+  ].find((candidate) => fs.existsSync(candidate));
   const MARGIN = 0.85;
   const CONTENT_W = SW - (MARGIN * 2);
 
@@ -1414,7 +1419,7 @@ async function buildPptx(quarterList, filters = {}) {
     const coverSlide = pptx.addSlide();
     coverSlide.background = { color: '2D1B4E' };
 
-    if (fs.existsSync(logoPath)) {
+    if (logoPath) {
       coverSlide.addImage({ path: logoPath, x: centerX(1.98), y: 0.58, w: 1.98, h: 1.98 });
     }
     coverSlide.addText('LIVING HOPE BAPTIST CHURCH', {
