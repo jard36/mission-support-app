@@ -1247,7 +1247,7 @@ function statusMetrics(value) {
   const text = String(value || '').trim();
   if (!text) return { checked: 0, total: 1 };
 
-  const matches = [...text.matchAll(/([A-E])\s*\./gi)];
+  const matches = [...text.matchAll(/([A-Z])\s*\./gi)];
   if (matches.length) {
     let checkedLetters = 0;
     matches.forEach((m, i) => {
@@ -1270,12 +1270,12 @@ function getEffectiveStatus(entry, monthKey) {
 }
 
 function hasCustomLetterStatus(value) {
-  return /[A-E]\s*\./i.test(String(value || ''));
+  return /[A-Z]\s*\./i.test(String(value || ''));
 }
 
 function parseLetterStatuses(value) {
   const text = String(value || '');
-  const matches = [...text.matchAll(/([A-E])\s*\./gi)];
+  const matches = [...text.matchAll(/([A-Z])\s*\./gi)];
   if (!matches.length) return [];
   return matches.map((m, i) => {
     const start = m.index + m[0].length;

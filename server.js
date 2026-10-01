@@ -195,14 +195,14 @@ function getEntrySupportSlots(entry) {
   const slots = new Set();
   ['m1','m2','m3'].forEach(key => {
     const text = String(entry?.[key] || '');
-    for (const match of text.matchAll(/([A-E])\s*\./gi)) slots.add(match[1].toUpperCase());
+    for (const match of text.matchAll(/([A-Z])\s*\./gi)) slots.add(match[1].toUpperCase());
   });
   return [...slots].sort();
 }
 
 function clearSupportSlotChecks(value, fallbackSlots = []) {
   const slots = [...new Set([
-    ...[...String(value || '').matchAll(/([A-E])\s*\./gi)].map(match => match[1].toUpperCase()),
+    ...[...String(value || '').matchAll(/([A-Z])\s*\./gi)].map(match => match[1].toUpperCase()),
     ...fallbackSlots
   ])];
   return slots.length ? slots.map(slot => `${slot}.`).join(' ') : '';
@@ -834,7 +834,7 @@ function normalizeDB(db) {
 function statusMetrics(value) {
   const text = String(value || '').trim();
   if (!text) return { checked: 0, total: 1 };
-  const matches = [...text.matchAll(/([A-E])\s*\./gi)];
+  const matches = [...text.matchAll(/([A-Z])\s*\./gi)];
   if (matches.length) {
     let checkedLetters = 0;
     matches.forEach((m, i) => {
@@ -1376,7 +1376,7 @@ function compactPptStatus(value) {
 function pptStatusDisplay(value) {
   const text = compactPptStatus(value);
   if (!text) return '';
-  const matches = [...text.matchAll(/([A-E])\.\s*(✓)?/gi)];
+  const matches = [...text.matchAll(/([A-Z])\.\s*(✓)?/gi)];
   if (matches.length >= 2) {
     return matches.map(m => `${m[1].toUpperCase()}. ${m[2] ? '✓' : ''}`.trimEnd()).join('    ');
   }
@@ -1387,7 +1387,7 @@ function pptStatusFontSize(value) {
   const text = pptStatusDisplay(value);
   if (!text) return 20;
   if (text === '✓') return 32;
-  const letters = (text.match(/[A-E]\./g) || []).length;
+  const letters = (text.match(/[A-Z]\./g) || []).length;
   if (letters >= 5) return 10;
   if (letters === 4) return 11;
   if (letters === 3) return 13;
@@ -1417,7 +1417,9 @@ function deduplicateIncompleteQuarters(quarterList, filters = {}) {
   const quarters = [...quarterList].sort((a, b) => quarterOrderValue(a) - quarterOrderValue(b));
   const pastorAssignments = new Map();
   quarters.forEach(q => {
-    const quarterFilters = { pastorType: filters.pastorType || 'All', statusFilter: 'Incomplete Only', currentLatest: false };
+    // Keep the current quarter's full roster, even when all of its boxes are
+    // checked, to match the report builder's latest-quarter behavior.
+    const quarterFilters = filtersForQuarter(q, { ...filters, statusFilter: 'Incomplete Only' });
     filterQuarterEntries(q, quarterFilters).forEach(entry => {
       const key = pastorIdentityKey(entry.name);
       if (key) pastorAssignments.set(key, { quarterId: q.id, entry });
