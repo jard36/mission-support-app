@@ -675,8 +675,8 @@ function ensureAssignmentModal(){
   modal.querySelector('#assign-pastor-search').addEventListener('input',renderAssignmentOptions);
   modal.querySelector('#assign-pastor-sort').addEventListener('change',renderAssignmentOptions);
   modal.querySelectorAll('.assignment-type-tab').forEach(btn=>btn.addEventListener('click',()=>{modal.querySelectorAll('.assignment-type-tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');renderAssignmentOptions();}));
-  modal.querySelector('#assign-pastor-select-all').onclick=()=>{getFilteredAssignmentPastors().forEach(p=>p.supportSlots.forEach(slot=>{const key=assignmentKey({...p,slot});if(!isAssignmentSlotTaken(p,slot))assignmentSelected.add(key);}));renderAssignmentOptions();};
-  modal.querySelector('#assign-pastor-clear').onclick=()=>{assignmentSelected.clear();renderAssignmentOptions();};
+  modal.querySelector('#assign-pastor-select-all').onclick=()=>{getFilteredAssignmentPastors().forEach(p=>p.supportSlots.forEach(slot=>{const key=assignmentKey({...p,slot});if(!isAssignmentSlotTaken(p,slot))assignmentSelected.add(key);}));syncAssignmentSelectionUI();};
+  modal.querySelector('#assign-pastor-clear').onclick=()=>{assignmentSelected.clear();syncAssignmentSelectionUI();};
   modal.querySelector('#assign-pastor-save').onclick=saveAssignment;
   return modal;
 }
@@ -709,7 +709,9 @@ function renderAssignmentOptions(){
   modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} slot${assignmentSelected.size===1?'':'s'} selected`;
   const taken=getTakenAssignmentSlots();
 
-  modal.querySelector('#assign-pastor-options').innerHTML=options.length?options.map(p=>{
+  const optionsContainer=modal.querySelector('#assign-pastor-options');
+  optionsContainer.scrollTop=0;
+  optionsContainer.innerHTML=options.length?options.map(p=>{
     const type=normalizePastorType(p.pastorType);
     const base=pastorBaseKey(p);
     const slots=(p.supportSlots&&p.supportSlots.length)?p.supportSlots:[''];
@@ -753,22 +755,40 @@ function renderAssignmentOptions(){
     }else{
       available.forEach(slot=>assignmentSelected.delete(assignmentKey({...pastor,slot})));
     }
-    renderAssignmentOptions();
+    syncAssignmentSelectionUI();
   }));
 
   modal.querySelectorAll('#assign-pastor-options .assignment-slot-input').forEach(input=>input.addEventListener('change',()=>{
     if(input.checked)assignmentSelected.add(input.value);else assignmentSelected.delete(input.value);
-    renderAssignmentOptions();
+    syncAssignmentSelectionUI();
   }));
 
-  modal.querySelectorAll('#assign-pastor-options .assignment-pastor-input').forEach(input=>{
-    const base=input.dataset.pastorBase;
-    const pastor=assignmentPastors.find(p=>pastorBaseKey(p)===base);
-    if(!pastor)return;
+  syncAssignmentSelectionUI();
+}
+
+function syncAssignmentSelectionUI(){
+  const modal=document.getElementById('assign-pastor-modal');
+  if(!modal)return;
+  modal.querySelector('#assign-pastor-count').textContent=`${assignmentSelected.size} slot${assignmentSelected.size===1?'':'s'} selected`;
+  modal.querySelectorAll('#assign-pastor-options .assignment-pastor-row').forEach(row=>{
+    const parentInput=row.querySelector('.assignment-pastor-input');
+    const base=parentInput?.dataset.pastorBase;
+    const pastor=assignmentPastors.find(item=>pastorBaseKey(item)===base);
+    if(!parentInput||!pastor)return;
     const slots=(pastor.supportSlots&&pastor.supportSlots.length)?pastor.supportSlots:[''];
+    const selected=slots.filter(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
     const available=slots.filter(slot=>!isAssignmentSlotTaken(pastor,slot));
-    const selected=available.filter(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
-    input.indeterminate=selected.length>0 && selected.length<available.length;
+    const allSelected=available.length>0&&available.every(slot=>assignmentSelected.has(assignmentKey({...pastor,slot})));
+    const partial=selected.length>0&&!allSelected;
+    parentInput.checked=allSelected;
+    parentInput.indeterminate=partial;
+    parentInput.disabled=available.length===0&&selected.length===0;
+    row.classList.toggle('is-selected',allSelected);
+    row.classList.toggle('is-partial',partial);
+    row.querySelectorAll('.assignment-slot-input').forEach(input=>{
+      input.checked=assignmentSelected.has(input.value);
+      input.closest('.assignment-slot-check')?.classList.toggle('is-selected',input.checked);
+    });
   });
 }
 
