@@ -4,6 +4,19 @@
 
 let currentUser = null;
 
+const THEME_STORAGE_KEY = 'livingHopeTheme';
+
+function applyTheme(theme) {
+  const selectedTheme = theme === 'light' ? 'light' : 'current';
+  document.documentElement.dataset.theme = selectedTheme;
+  try { localStorage.setItem(THEME_STORAGE_KEY, selectedTheme); } catch (_) {}
+  document.querySelectorAll('[data-theme-choice]').forEach((button) => {
+    const selected = button.dataset.themeChoice === selectedTheme;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+}
+
 let state = {
   quarters: [],
   currentQuarter: null,
@@ -82,6 +95,10 @@ if (document.readyState === 'loading') {
 }
 
 function setupAuthListeners() {
+  document.querySelectorAll('[data-theme-choice]').forEach((button) => {
+    button.addEventListener('click', () => applyTheme(button.dataset.themeChoice));
+  });
+  applyTheme(document.documentElement.dataset.theme);
   const form = document.getElementById('login-form');
   if (form) form.addEventListener('submit', handleLogin);
   document.getElementById('btn-open-signup')?.addEventListener('click', () => openSignupModal(false));

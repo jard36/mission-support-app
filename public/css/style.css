@@ -2038,6 +2038,137 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 }
 .assignment-slot-help i { color:#a78bfa; margin-top:2px; }
 
+/* Shared two-choice theme control on the login screen and tracker header. */
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-card);
+  flex: 0 0 auto;
+}
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: .68rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.theme-option:hover { color: var(--text-main); }
+.theme-option.active { background: var(--primary-light); color: #fff; box-shadow: 0 2px 8px var(--purple-glow); }
+.login-theme-switch { display:flex; width:max-content; margin: -10px auto 20px; }
+.login-theme-switch.theme-switch { background:rgba(255,255,255,.72); border-color:#ded5eb; }
+.login-theme-switch .theme-option { color:#756b84; }
+.login-theme-switch .theme-option.active { color:#fff; }
+.app-theme-switch { border-color:var(--border-light); background:rgba(15,10,28,.28); }
+@media (max-width:1100px) { .theme-option { padding:0 7px; } }
+@media (max-width:720px) {
+  .app-theme-switch .theme-option span { display:none; }
+  .app-theme-switch .theme-option { width:32px; padding:0; }
+}
+
+/* Light palette. Current mode continues to use the original purple variables. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --primary-deep:#f2edfa;
+  --primary-dark:#e9e0f5;
+  --primary:#6d3ab2;
+  --primary-hover:#5b2c9e;
+  --primary-light:#7442bd;
+  --accent-violet:#7650b5;
+  --accent-soft:#725a98;
+  --purple-glow:rgba(116,66,189,.16);
+  --bg-main:#f5f3f8;
+  --bg-card:#ffffff;
+  --bg-card-hover:#f0ebf6;
+  --bg-input:#f7f5fa;
+  --border-color:#e2dbe9;
+  --border-light:#cbbddd;
+  --text-main:#292333;
+  --text-muted:#645c70;
+  --text-subtle:#81778d;
+  --text-white:#30263d;
+  --emerald:#087d5b;
+  --emerald-bg:rgba(16,185,129,.12);
+  --emerald-border:rgba(8,125,91,.35);
+  --amber:#a45e00;
+  --amber-bg:rgba(245,158,11,.13);
+  --rose:#c73552;
+  --rose-bg:rgba(244,63,94,.11);
+  --shadow-sm:0 2px 8px rgba(40,25,58,.07);
+  --shadow-md:0 4px 16px rgba(40,25,58,.10);
+  --shadow-lg:0 10px 30px rgba(40,25,58,.16);
+}
+:root[data-theme="light"] body { background-color:var(--bg-main); color:var(--text-main); }
+:root[data-theme="light"] .app-header { background:linear-gradient(135deg,#fff 0%,#f2edf8 100%); }
+:root[data-theme="light"] .app-title { background:none; color:#342344; -webkit-text-fill-color:initial; }
+:root[data-theme="light"] .app-subtitle { color:#6c6277; }
+:root[data-theme="light"] .app-theme-switch { background:#fff; border-color:var(--border-color); }
+:root[data-theme="light"] .btn-secondary { color:#4b3c5e; }
+:root[data-theme="light"] .dropdown-menu a:hover { color:var(--text-main); }
+:root[data-theme="light"] .data-table thead th { color:#514064; }
+:root[data-theme="light"] .data-table tbody td { border-bottom-color:rgba(96,75,120,.13); }
+:root[data-theme="light"] .pill-btn { color:#514064; }
+:root[data-theme="light"] .section-title,
+:root[data-theme="light"] .pastor-name-cell,
+:root[data-theme="light"] .stat-value,
+:root[data-theme="light"] .modal-header h3 { color:var(--text-white); }
+:root[data-theme="light"] .purple-bg { background:rgba(116,66,189,.12); color:#69409f; }
+:root[data-theme="light"] .month-bulk-bar { background:#f0ebf6; }
+:root[data-theme="light"] .modal-backdrop { background:rgba(32,23,43,.48); }
+:root[data-theme="light"] .login-screen { background:#eee8f4; }
+:root[data-theme="light"] .login-screen::before {
+  background-image:linear-gradient(90deg,rgba(248,246,251,.80),rgba(248,246,251,.58) 44%,rgba(248,246,251,.18) 100%),url('../images/login-bg.jpg');
+}
+:root[data-theme="light"] .login-card { background:rgba(255,255,255,.94); }
+:root[data-theme="light"] .login-note { color:#685f72; }
+:root[data-theme="light"] .login-theme-switch { background:#f5f2f8; }
+:root[data-theme="light"] .header-user-name { color:#34283f; }
+:root[data-theme="light"] .header-user-role { background:#eee5fb; color:#6941a5; }
+:root[data-theme="light"] .all-quarter-card,
+:root[data-theme="light"] .report-quarter-option,
+:root[data-theme="light"] .hidden-pastor-row,
+:root[data-theme="light"] .notification-recipient-mode label,
+:root[data-theme="light"] .notification-recipient,
+:root[data-theme="light"] .user-role-tab,
+:root[data-theme="light"] .assignment-option,
+:root[data-theme="light"] .assignment-list-shell,
+:root[data-theme="light"] .assignment-list-toolbar,
+:root[data-theme="light"] .account-toggle-row,
+:root[data-theme="light"] .assignment-slot-help,
+:root[data-theme="light"] .user-status-card,
+:root[data-theme="light"] .user-detail-chip {
+  background-color:var(--bg-card);
+  color:var(--text-main);
+}
+:root[data-theme="light"] .all-quarter-heading { background:#f0ebf6; }
+:root[data-theme="light"] .assignment-option.is-selected { background:#efe8f8; }
+:root[data-theme="light"] .assignment-type-badge.foreign,
+:root[data-theme="light"] .pastor-type-badge.type-foreign { color:#62458a; }
+:root[data-theme="light"] .user-role-badge,
+:root[data-theme="light"] .user-role-badge.role-staff { color:#604487; }
+:root[data-theme="light"] .user-role-badge.role-admin { color:#285787; }
+:root[data-theme="light"] .user-role-badge.role-supporter { color:#087d5b; }
+:root[data-theme="light"] .assignment-type-badge.local,
+:root[data-theme="light"] .pastor-type-badge.type-local { color:#087d5b; }
+:root[data-theme="light"] .assignment-slot-help i,
+:root[data-theme="light"] .user-status-card > i,
+:root[data-theme="light"] .user-detail-chip > i { color:#704ca8; }
+:root[data-theme="light"] .supporter-logout-btn { color:#b83149; }
+:root[data-theme="light"] .supporter-logout-btn:hover { color:#fff; }
+
 /* Keep the three-dot menu usable on smaller screens. */
 .dropdown-menu { max-height: min(72vh, 520px); overflow-y: auto; overscroll-behavior: contain; }
 @media (max-width:720px) {
