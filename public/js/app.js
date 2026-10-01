@@ -27,7 +27,20 @@ async function downloadPptxFile(url) {
       try { payload = JSON.parse(body); } catch (_) { payload.error = body; }
       throw new Error(payload.error || `PowerPoint export failed (${response.status}).`);
     }
-    const blob = await response.blob();
+    const responseType = (response.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
+    let blob;
+    let exportFilename = '';
+    if (responseType === 'application/json') {
+      const payload = await response.json();
+      if (!payload.base64) throw new Error(payload.error || 'The export response did not contain a PowerPoint file.');
+      const binary = atob(payload.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let offset = 0; offset < binary.length; offset += 1) bytes[offset] = binary.charCodeAt(offset);
+      blob = new Blob([bytes], { type: payload.mimeType || powerpointType });
+      exportFilename = payload.filename || '';
+    } else {
+      blob = await response.blob();
+    }
     if (!blob.size) throw new Error('The PowerPoint export was empty. Please try again.');
     const signature = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
     if (signature[0] !== 0x50 || signature[1] !== 0x4b) {
@@ -39,7 +52,7 @@ async function downloadPptxFile(url) {
     const disposition = response.headers.get('Content-Disposition') || '';
     const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
     const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-    let filename = plainName || 'Mission_Support_Report.pptx';
+    let filename = exportFilename || plainName || 'Mission_Support_Report.pptx';
     if (encodedName) {
       try { filename = decodeURIComponent(encodedName); } catch (_) { filename = encodedName; }
     }
