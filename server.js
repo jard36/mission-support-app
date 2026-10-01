@@ -173,17 +173,22 @@ function normalizePastorKey(name, number) {
   return `${String(number ?? '').trim()}::${String(name || '').trim().toLowerCase()}`;
 }
 
+function getSupporterAssignments(user) {
+  if (user?.role !== 'supporter') return [];
+  const assignedList = Array.isArray(user.assignedPastors) ? user.assignedPastors : (user.assignedPastor ? [user.assignedPastor] : []);
+  return assignedList.filter(assigned => assigned?.name);
+}
+
+function assignmentMatchesEntry(assigned, entry) {
+  const assignedName = String(assigned?.name || '').trim().toLowerCase();
+  return normalizePastorKey(entry.name, entry.number) === normalizePastorKey(assigned.name, assigned.number) ||
+    (String(entry.name || '').trim().toLowerCase() === assignedName && (!assigned.number || String(entry.number || '') === String(assigned.number || '')));
+}
+
 function getSupporterEntryFilter(user) {
   if (user?.role !== 'supporter') return () => true;
-  const assignedList = Array.isArray(user.assignedPastors) ? user.assignedPastors : (user.assignedPastor ? [user.assignedPastor] : []);
-  if (!assignedList.length) return () => false;
-  const keys = assignedList.map(assigned => ({
-    key: normalizePastorKey(assigned.name, assigned.number),
-    name: String(assigned.name || '').trim().toLowerCase(),
-    number: String(assigned.number || '').trim()
-  }));
-  return (entry) => keys.some(assigned => normalizePastorKey(entry.name, entry.number) === assigned.key ||
-    (String(entry.name || '').trim().toLowerCase() === assigned.name && (!assigned.number || String(entry.number || '') === assigned.number)));
+  const assignments = getSupporterAssignments(user);
+  return entry => assignments.some(assigned => assignmentMatchesEntry(assigned, entry));
 }
 
 function getEntrySupportSlots(entry) {
@@ -195,11 +200,52 @@ function getEntrySupportSlots(entry) {
   return [...slots].sort();
 }
 
+function clearSupportSlotChecks(value, fallbackSlots = []) {
+  const slots = [...new Set([
+    ...[...String(value || '').matchAll(/([A-E])\s*\./gi)].map(match => match[1].toUpperCase()),
+    ...fallbackSlots
+  ])];
+  return slots.length ? slots.map(slot => `${slot}.`).join(' ') : '';
+}
+
+// A quarter created from another quarter should retain the lettered supporter
+// slots, but its support checks always start empty. Older newly-created
+// quarters may already exist without those labels, so repair the latest one
+// lazily when an admin/staff user opens the quarter list.
+function restoreLatestQuarterSupportSlots(db) {
+  const quarters = Array.isArray(db?.quarters) ? db.quarters : [];
+  if (quarters.length < 2) return 0;
+  const latest = quarters[quarters.length - 1];
+  const previous = quarters[quarters.length - 2];
+  if (!latest || !previous) return 0;
+
+  let repaired = 0;
+  for (const entry of latest.entries || []) {
+    if (entry.hidden || ['m1', 'm2', 'm3'].some(key => String(entry[key] || '').trim())) continue;
+    const candidates = (previous.entries || []).filter(source => !source.hidden && String(source.name || '').trim().toLowerCase() === String(entry.name || '').trim().toLowerCase());
+    const source = candidates.find(candidate => String(candidate.number || '') === String(entry.number || '')) || (candidates.length === 1 ? candidates[0] : null);
+    if (!source) continue;
+    const slots = getEntrySupportSlots(source);
+    if (slots.length < 2) continue;
+    for (const key of ['m1', 'm2', 'm3']) entry[key] = clearSupportSlotChecks(source[key], slots);
+    repaired++;
+  }
+  return repaired;
+}
+
 function filterQuarterForUser(q, user) {
   if (!q) return q;
   const activeEntries = (q.entries || []).filter(e => !e.hidden);
   if (user?.role !== 'supporter') return { ...q, entries: activeEntries };
-  return { ...q, entries: activeEntries.filter(getSupporterEntryFilter(user)) };
+  const assignments = getSupporterAssignments(user);
+  return {
+    ...q,
+    entries: activeEntries.filter(getSupporterEntryFilter(user)).map(entry => ({
+      ...entry,
+      supporterAssignedSlots: [...new Set(assignments.filter(assigned => assignmentMatchesEntry(assigned, entry))
+        .map(assigned => String(assigned.slot || '').trim().toUpperCase()).filter(Boolean))]
+    }))
+  };
 }
 
 // Login/session endpoints remain public. All mission data APIs below are protected.
@@ -782,6 +828,16 @@ function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', cur
 app.get('/api/quarters', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
+    if (['admin', 'staff'].includes(req.user?.role)) {
+      const repaired = restoreLatestQuarterSupportSlots(db);
+      if (repaired) {
+        addAudit(db, req, 'Quarter Support Slots Restored', {
+          quarterId: db.quarters.at(-1)?.id,
+          description: `Restored blank supporter slot labels for ${repaired} pastor record${repaired === 1 ? '' : 's'}`
+        });
+        await writeDB(db, { touchLastUpdated: true });
+      }
+    }
     const summary = db.quarters.map(q => {
       const visibleEntries = q.entries.filter(e => !e.hidden).filter(getSupporterEntryFilter(req.user));
       const total = visibleEntries.length;
@@ -817,6 +873,16 @@ app.get('/api/quarters', async (req, res) => {
 app.get('/api/quarters/:id', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
+    if (['admin', 'staff'].includes(req.user?.role)) {
+      const repaired = restoreLatestQuarterSupportSlots(db);
+      if (repaired) {
+        addAudit(db, req, 'Quarter Support Slots Restored', {
+          quarterId: db.quarters.at(-1)?.id,
+          description: `Restored blank supporter slot labels for ${repaired} pastor record${repaired === 1 ? '' : 's'}`
+        });
+        await writeDB(db, { touchLastUpdated: true });
+      }
+    }
     const q = db.quarters.find(x => x.id === req.params.id);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
     res.json(filterQuarterForUser(q, req.user));
@@ -854,18 +920,21 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
     if (copyFromQuarterId) {
       const sourceQ = db.quarters.find(q => q.id === copyFromQuarterId);
       if (sourceQ) {
-        entries = sourceQ.entries.filter(e => !e.hidden).map((e, idx) => ({
-          id: `${qKey}-${idx + 1}`,
-          number: e.number || (idx + 1),
-          name: e.name,
-          rawName: e.rawName || `${e.number || (idx + 1)}. ${e.name}`,
-          m1: '',
-          m2: '',
-          m3: '',
-          notes: '',
-          pastorType: normalizePastorType(e.pastorType),
-          hidden: false
-        }));
+        entries = sourceQ.entries.filter(e => !e.hidden).map((e, idx) => {
+          const slots = getEntrySupportSlots(e);
+          return {
+            id: `${qKey}-${idx + 1}`,
+            number: e.number || (idx + 1),
+            name: e.name,
+            rawName: e.rawName || `${e.number || (idx + 1)}. ${e.name}`,
+            m1: clearSupportSlotChecks(e.m1, slots),
+            m2: clearSupportSlotChecks(e.m2, slots),
+            m3: clearSupportSlotChecks(e.m3, slots),
+            notes: '',
+            pastorType: normalizePastorType(e.pastorType),
+            hidden: false
+          };
+        });
       }
     }
 

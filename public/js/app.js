@@ -245,8 +245,8 @@ function applyRoleUi() {
   const supporterLogout = document.getElementById('btn-supporter-logout');
   if (supporterLogout) supporterLogout.style.display = supporter ? 'inline-flex' : 'none';
   const supporterMenuIds = [
-    'action-download-all','action-backup-json','action-add-quarter','action-user-management',
-    'action-audit-trail','action-hidden-pastors','action-notifications','action-reset-data'
+    'action-download-all','action-add-quarter','action-user-management',
+    'action-audit-trail','action-hidden-pastors','action-notifications'
   ];
   supporterMenuIds.forEach(id => {
     const el = document.getElementById(id);
@@ -1068,7 +1068,9 @@ function renderAllView() {
       <div class="table-responsive"><table class="data-table all-quarter-table"><thead><tr><th style="width:70px;">#</th><th>Pastor / Missionary</th><th>TYPE</th>${(q.months||[]).slice(0,3).map(m=>`<th style="text-align:center;">${escapeHtml(m).toUpperCase()}</th>`).join('')}<th style="text-align:center;">STATUS</th></tr></thead><tbody>`;
     entries.forEach((e,idx) => {
       const vals=[e.m1,e.m2,e.m3]; const badge=renderStatusBadge(e); const type=normalizePastorType(e.pastorType);
-      html += `<tr><td>${e.number || idx+1}</td><td><strong>${escapeHtml(e.name)}</strong></td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
+      const assignedSlots = currentUser?.role === 'supporter' ? (e.supporterAssignedSlots || []) : [];
+      const slotLabel = assignedSlots.length ? `<span class="supporter-slot-label">Your support: ${assignedSlots.map(escapeHtml).join(', ')}</span>` : '';
+      html += `<tr><td>${e.number || idx+1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
     });
     html += '</tbody></table></div></div>';
   });
@@ -1146,6 +1148,7 @@ function renderTable() {
           <div class="pastor-name-cell ${currentUser?.role === 'supporter' ? '' : 'pastor-name-editable'}" ${currentUser?.role === 'supporter' ? '' : `onclick="editPastor('${e.id}')" title="Click to edit pastor"`}>
             <strong>${escapeHtml(e.name)}</strong>
             <span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span>
+            ${currentUser?.role === 'supporter' && e.supporterAssignedSlots?.length ? `<span class="supporter-slot-label">Your support: ${e.supporterAssignedSlots.map(escapeHtml).join(', ')}</span>` : ''}
             ${e.notes ? `<span class="pastor-note-pill" title="${escapeHtml(e.notes)}"><i class="fa-regular fa-note-sticky"></i> ${escapeHtml(e.notes)}</span>` : ''}
           </div>
         </td>
@@ -1206,11 +1209,21 @@ function serializeLetterStatuses(items) {
 
 function compactStatusForViewer(value) { return String(value || '').replace(/\s+/g,' ').trim(); }
 
+function renderSupporterStatus(entry, value) {
+  const text = compactStatusForViewer(value);
+  const items = parseLetterStatuses(text);
+  if (!items.length) return `<span class="viewer-status-text">${escapeHtml(text || '—')}</span>`;
+  const assigned = new Set((entry.supporterAssignedSlots || []).map(slot => String(slot).toUpperCase()));
+  return `<div class="viewer-slot-list" aria-label="Your assigned supporter slot is ${escapeHtml([...assigned].join(', ') || 'not specified')}">${items.map(item => {
+    const mine = assigned.has(item.letter);
+    return `<span class="viewer-slot-chip ${mine ? 'is-yours' : ''}" title="${mine ? 'Your assigned support slot' : 'Another supporter slot'}"><span>${item.letter}.</span><span class="viewer-slot-mark">${item.checked ? '✓' : ''}</span></span>`;
+  }).join('')}</div>`;
+}
+
 function renderStatusBtn(entry, monthKey) {
   const val = getEffectiveStatus(entry, monthKey);
   if (currentUser?.role === 'supporter') {
-    const text = compactStatusForViewer(val);
-    return `<span class="viewer-status-text">${escapeHtml(text || '—')}</span>`;
+    return renderSupporterStatus(entry, val);
   }
   const pending = isPending(entry.id, monthKey);
 
@@ -1536,11 +1549,12 @@ async function handlePastorSubmit(e) {
 function openQuarterModal() {
   const copySelect = document.getElementById('new-quarter-copy');
   copySelect.innerHTML = '<option value="">-- Start with Empty List --</option>';
+  const latestQuarterId = state.quarters.at(-1)?.id;
   state.quarters.forEach(q => {
     const opt = document.createElement('option');
     opt.value = q.id;
     opt.textContent = `Copy from ${q.year} ${q.quarterName} (${q.entries?.length || 0} pastors)`;
-    if (state.currentQuarter && q.id === state.currentQuarter.id) opt.selected = true;
+    if (q.id === latestQuarterId) opt.selected = true;
     copySelect.appendChild(opt);
   });
 

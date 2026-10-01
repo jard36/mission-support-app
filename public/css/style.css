@@ -1431,6 +1431,63 @@ body {
 .mini-status-btn.is-checked { color: #DDD6FE; border-color: var(--emerald-border); background: var(--emerald-bg); }
 .mini-status-btn.is-checked .mini-check-box { color: var(--emerald); border-color: var(--emerald-border); background: rgba(16,185,129,.12); }
 
+/* Read-only supporter view: clearly call out the assigned slot. */
+.viewer-slot-list {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: .2rem;
+}
+.viewer-slot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .18rem;
+  min-width: 34px;
+  height: 27px;
+  padding: 0 .22rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: .68rem;
+  font-weight: 700;
+}
+.viewer-slot-chip.is-yours {
+  border-color: var(--emerald-border);
+  background: var(--emerald-bg);
+  color: #A7F3D0;
+  box-shadow: 0 0 0 1px rgba(16,185,129,.12);
+}
+.viewer-slot-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  color: var(--text-subtle);
+  font-size: .65rem;
+  line-height: 1;
+}
+.viewer-slot-chip.is-yours .viewer-slot-mark {
+  border-color: var(--emerald-border);
+  color: var(--emerald);
+}
+.supporter-slot-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: .16rem .48rem;
+  border: 1px solid var(--emerald-border);
+  border-radius: 999px;
+  background: var(--emerald-bg);
+  color: #A7F3D0;
+  font-size: .64rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 @media (max-width: 700px) {
   .pending-change-item { grid-template-columns: 1fr 28px; }
   .pending-change-values { grid-column: 1 / -1; }
@@ -1439,6 +1496,7 @@ body {
   .mini-status-list { gap: .12rem; }
   .mini-status-btn { min-width: 31px; height: 26px; font-size: .62rem; }
   .mini-check-box { width: 14px; height: 14px; }
+  .viewer-slot-chip { min-width: 30px; height: 25px; font-size: .62rem; }
 }
 
 /* User-requested normal (non-fullscreen) web preview: compact A/B/C/D/E status text. */
