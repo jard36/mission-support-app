@@ -788,16 +788,17 @@ function syncPastorTypeAcrossQuarters(db, names, pastorType) {
 }
 
 async function sendPptxDownload(res, pptx, filename) {
-  const buffer = await pptx.write({ outputType: 'nodebuffer' });
+  // PptxGenJS only applies compression to its STREAM output type in Node;
+  // nodebuffer currently ignores the compression option and makes large files.
+  const buffer = await pptx.write({ outputType: 'STREAM', compression: true });
   if (!Buffer.isBuffer(buffer) || buffer.length < 4) throw new Error('PowerPoint generation returned an invalid file.');
   res.setHeader('Cache-Control', 'private, no-store');
-  // The Next.js API adapter transports JSON reliably; binary Express responses
-  // can be corrupted while passing through the serverless bridge.
-  return res.json({
-    filename,
-    mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    base64: buffer.toString('base64')
-  });
+  res.status(200);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', String(buffer.length));
+  res.setHeader('Cache-Control', 'private, no-store');
+  return res.end(buffer);
 }
 
 function normalizeEntry(entry) {
