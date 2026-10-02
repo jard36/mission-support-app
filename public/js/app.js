@@ -1602,7 +1602,12 @@ async function handlePastorSubmit(e) {
         const idx = state.currentQuarter.entries.findIndex(x => x.id === entryId);
         if (idx !== -1) { if (data.entry.hidden) state.currentQuarter.entries.splice(idx, 1); else state.currentQuarter.entries[idx] = data.entry; }
       }
-      showToast(data.entry.hidden ? 'Pastor excluded and moved to Hidden Pastors.' : 'Pastor updated successfully!', 'success');
+      const typeSyncCount = Array.isArray(data.typeUpdatedQuarters) ? data.typeUpdatedQuarters.length : 0;
+      showToast(data.entry.hidden
+        ? 'Pastor excluded and moved to Hidden Pastors.'
+        : typeSyncCount
+          ? `Pastor type synchronized across ${typeSyncCount} quarter${typeSyncCount === 1 ? '' : 's'}.`
+          : 'Pastor updated successfully!', 'success');
     } else {
       // POST create
       if (!state.currentQuarter) return;

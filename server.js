@@ -773,18 +773,67 @@ function pastorIdentityKey(name) {
   return String(name || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-function syncPastorTypeAcrossQuarters(db, names, pastorType) {
+function syncPastorTypeAcrossQuarters(db, names, pastorType, updatedAt = new Date().toISOString()) {
   const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
   const updatedQuarters = new Set();
-  const now = new Date().toISOString();
   db.quarters.forEach(q => q.entries.forEach(entry => {
-    if (identities.has(pastorIdentityKey(entry.name)) && normalizePastorType(entry.pastorType) !== pastorType) {
+    if (!identities.has(pastorIdentityKey(entry.name))) return;
+    if (normalizePastorType(entry.pastorType) !== pastorType) {
       entry.pastorType = pastorType;
-      entry.updatedAt = now;
+      entry.updatedAt = updatedAt;
       updatedQuarters.add(q.id);
     }
+    entry.pastorTypeUpdatedAt = updatedAt;
   }));
   return [...updatedQuarters];
+}
+
+function reconcilePastorTypesAcrossQuarters(db) {
+  const entriesByPastor = new Map();
+  db.quarters.forEach(q => (q.entries || []).forEach(entry => {
+    const key = pastorIdentityKey(entry.name);
+    if (!key) return;
+    if (!entriesByPastor.has(key)) entriesByPastor.set(key, []);
+    entriesByPastor.get(key).push({ quarter: q, entry, type: normalizePastorType(entry.pastorType) });
+  }));
+
+  const changedQuarters = new Set();
+  let changedEntries = 0;
+  const now = new Date().toISOString();
+  entriesByPastor.forEach(records => {
+    const classified = records.filter(record => ['Local', 'Foreign'].includes(record.type));
+    if (!classified.length) return;
+    const hasExplicitTypeTimestamp = classified.some(record => Number.isFinite(Date.parse(record.entry.pastorTypeUpdatedAt || '')));
+    classified.sort((a, b) => {
+      if (hasExplicitTypeTimestamp) {
+        const timestampDifference = (Date.parse(b.entry.pastorTypeUpdatedAt || '') || 0)
+          - (Date.parse(a.entry.pastorTypeUpdatedAt || '') || 0);
+        if (timestampDifference) return timestampDifference;
+      }
+      return quarterOrderValue(b.quarter) - quarterOrderValue(a.quarter);
+    });
+    const canonicalType = classified[0].type;
+    records.forEach(({ quarter, entry }) => {
+      if (normalizePastorType(entry.pastorType) === canonicalType) return;
+      entry.pastorType = canonicalType;
+      entry.pastorTypeUpdatedAt = now;
+      entry.updatedAt = now;
+      changedQuarters.add(quarter.id);
+      changedEntries++;
+    });
+  });
+  return { changedEntries, changedQuarters: [...changedQuarters] };
+}
+
+async function reconcileAndPersistQuarterTypes(db, req) {
+  const result = reconcilePastorTypesAcrossQuarters(db);
+  if (!result.changedEntries) return false;
+  addAudit(db, req, 'Pastor Types Synchronized', {
+    quarterIds: result.changedQuarters,
+    description: `Synchronized Local/Foreign pastor types across ${result.changedQuarters.length} quarter${result.changedQuarters.length === 1 ? '' : 's'} (${result.changedEntries} records)`
+  });
+  await writeDB(db, { touchLastUpdated: true });
+  return true;
 }
 
 function pastorTypeForNewOccurrence(db, pastorName, requestedType) {
@@ -873,6 +922,7 @@ function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', cur
 app.get('/api/quarters', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
+    if (['admin', 'staff'].includes(req.user?.role)) await reconcileAndPersistQuarterTypes(db, req);
     if (['admin', 'staff'].includes(req.user?.role)) {
       const repaired = restoreLatestQuarterSupportSlots(db);
       if (repaired) {
@@ -918,6 +968,7 @@ app.get('/api/quarters', async (req, res) => {
 app.get('/api/quarters/:id', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
+    if (['admin', 'staff'].includes(req.user?.role)) await reconcileAndPersistQuarterTypes(db, req);
     if (['admin', 'staff'].includes(req.user?.role)) {
       const repaired = restoreLatestQuarterSupportSlots(db);
       if (repaired) {
@@ -1047,6 +1098,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
       m3: m3 || '',
       notes: notes || '',
       pastorType: effectivePastorType,
+      pastorTypeUpdatedAt: now,
       hidden: false,
       updatedAt: now
     };
@@ -1070,6 +1122,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
             m3: '',
             notes: '',
             pastorType: effectivePastorType,
+            pastorTypeUpdatedAt: now,
             hidden: false,
             updatedAt: now
           });
@@ -1136,7 +1189,9 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
 
     let typeUpdatedQuarters = [];
     if (before.pastorType !== candidate.pastorType) {
-      typeUpdatedQuarters = [...new Set([quarter.id, ...syncPastorTypeAcrossQuarters(db, [before.name, candidate.name], candidate.pastorType)])];
+      const typeTimestamp = new Date().toISOString();
+      entry.pastorTypeUpdatedAt = typeTimestamp;
+      typeUpdatedQuarters = [...new Set([quarter.id, ...syncPastorTypeAcrossQuarters(db, [before.name, candidate.name], candidate.pastorType, typeTimestamp)])];
     }
 
     const supportChanged = changes.some(c => quarter.months?.includes(c.field));
@@ -1151,7 +1206,7 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
     });
 
     await writeDB(db, { touchLastUpdated: true });
-    res.json({ entry, lastUpdated: db.lastUpdated });
+    res.json({ entry, lastUpdated: db.lastUpdated, typeUpdatedQuarters });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
