@@ -984,10 +984,10 @@ function isEntryComplete(entry) {
   return m.total > 0 && m.checked === m.total;
 }
 
-function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All' } = {}) {
+function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', currentLatest = false } = {}) {
   let entries = (q.entries || []).map(normalizeEntry).filter(e => !e.hidden);
   if (pastorType && pastorType !== 'All') entries = entries.filter(e => e.pastorType === pastorType);
-  if (statusFilter && statusFilter !== 'All') {
+  if (statusFilter && statusFilter !== 'All' && !currentLatest) {
     entries = entries.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
   }
   return entries;
@@ -1611,9 +1611,11 @@ function pptStatusFontSize(value) {
 }
 
 function filtersForQuarter(q, filters = {}) {
+  const latestId = filters.latestQuarterId || null;
   return {
     pastorType: filters.pastorType || 'All',
-    statusFilter: filters.statusFilter || 'All'
+    statusFilter: filters.statusFilter || 'All',
+    currentLatest: Boolean(latestId && q.id === latestId)
   };
 }
 
@@ -1639,7 +1641,7 @@ async function buildPptx(quarterList, filters = {}) {
   ].find((candidate) => fs.existsSync(candidate));
   // Filter each quarter independently so a pastor's incomplete marks in one
   // quarter do not hide that quarter when their record exists in another.
-  // This also keeps the latest quarter subject to Incomplete Only in reports.
+  // The newest quarter always shows its full roster, even with Incomplete Only.
   quarterList = quarterList
     .map(q => ({
       ...q,
