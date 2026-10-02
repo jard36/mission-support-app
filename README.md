@@ -52,12 +52,12 @@ The app now requires an authenticated session before mission-support data can be
 ### Initial Admin Account
 
 - Username: `jarred`
-- Password: the initial password provided by the project owner
+- Password: set by the project owner through `INITIAL_ADMIN_PASSWORD` when bootstrapping an empty database
 - Role: Admin
 
-The password is **not stored in plaintext**. On first authentication/session check, the default admin account is created with a salted `scrypt` password hash inside the database. Sessions are stored server-side in the same Neon JSONB state and use an HttpOnly cookie.
+The bootstrap password must be at least 12 characters, is read only from the server environment, and is stored only as a salted `scrypt` hash. The password is not hardcoded in the current source. If the database has the original fixed bootstrap hash, setting this variable rotates it on the next authentication check and invalidates existing sessions. Other existing admin passwords are unchanged. Sessions are stored server-side in the same Neon JSONB state and use an HttpOnly, SameSite=Lax cookie.
 
-This release intentionally does **not** add public signup, Staff accounts, or Supporter accounts yet. Those can be added after the permission/assignment workflow is finalized.
+Public signup creates pending Supporter accounts. Admin and Staff accounts are managed by an Admin.
 
 ### Important security behavior
 
@@ -65,3 +65,18 @@ This release intentionally does **not** add public signup, Staff accounts, or Su
 - Reset-to-original-data requires Admin role.
 - Admin passwords cannot be viewed in plaintext.
 - Sessions expire after 7 days.
+- Changing a user's password revokes that user's existing sessions.
+- Sign-in attempts are temporarily throttled after repeated failures.
+- Same-origin checks protect state-changing authenticated requests.
+- Production must set `CRON_SECRET` to enable scheduled reminder processing.
+
+## Environment variables
+
+Do not commit these values to GitHub. Set them in Vercel Project Settings → Environment Variables, or use a local `.env` file (which is ignored by Git).
+
+- `INITIAL_ADMIN_PASSWORD` — bootstrap password used when the database has no `jarred` admin account; also rotates the original fixed bootstrap credential if present. Use at least 12 characters and update this secret before the next login when rotating the legacy credential.
+- `DATABASE_URL` — Neon Postgres connection string.
+- `RESEND_API_KEY` — Resend API key.
+- `RESEND_FROM_EMAIL` — verified sender address.
+- `IPROG_SMS_API_TOKEN` — IPROG SMS API token.
+- `CRON_SECRET` — secret used to protect the scheduled reminder endpoint.

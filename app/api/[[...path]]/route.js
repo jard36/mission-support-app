@@ -8,10 +8,46 @@ const expressHandler = serverless(expressApp, {
   binary: ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
 });
 
+const MAX_API_BODY_BYTES = 2 * 1024 * 1024;
+
+async function readBodyWithLimit(request) {
+  if (!request.body) return Buffer.alloc(0);
+  const contentLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_API_BODY_BYTES) {
+    throw new Error('Request body is too large.');
+  }
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_API_BODY_BYTES) {
+        await reader.cancel();
+        throw new Error('Request body is too large.');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
 async function dispatch(request) {
   const url = new URL(request.url);
   const hasBody = !['GET', 'HEAD'].includes(request.method.toUpperCase());
-  const rawBody = hasBody ? Buffer.from(await request.arrayBuffer()) : Buffer.alloc(0);
+  let rawBody = Buffer.alloc(0);
+  if (hasBody) {
+    try {
+      rawBody = await readBodyWithLimit(request);
+    } catch {
+      return Response.json({ error: 'Request body is too large.' }, { status: 413 });
+    }
+  }
   const userAgent = request.headers.get('user-agent') || '';
   const event = {
     version: '2.0',

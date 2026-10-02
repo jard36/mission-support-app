@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -9,8 +8,17 @@ const { Resend } = require('resend');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // API responses are user/session-specific. Prevent Vercel/CDN caching from
@@ -29,7 +37,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const { readDB, writeDB, resetDB, getDatabaseMode } = require('./db');
+const { readDB, writeDB, resetDB } = require('./db');
 
 
 // --------------------------------------------------------------------------
@@ -38,10 +46,12 @@ const { readDB, writeDB, resetDB, getDatabaseMode } = require('./db');
 const SESSION_COOKIE = 'mission_support_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 const DEFAULT_ADMIN_USERNAME = 'jarred';
-// The initial admin password is only used once to create a secure hash.
-// The plaintext password is never stored in the database.
-const DEFAULT_ADMIN_SALT = 'cbc870a4360a4dd4be1db150150baf16';
-const DEFAULT_ADMIN_HASH = 'b0ae490cfc530472c95ed07ea2cc8f7ca97b864eb5e9fab3135637ff03e6321cc653ce36a3e42da04254e1ec62c584b01e8b82a2f8ffd413477233f73be8e6e4';
+// Detect the original fixed bootstrap hash so deployments can rotate it using
+// INITIAL_ADMIN_PASSWORD without forcing an unconfigured database offline.
+const LEGACY_BOOTSTRAP_SALT = 'cbc870a4360a4dd4be1db150150baf16';
+const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_FAILURE_LIMIT = 8;
+const loginFailures = new Map();
 
 function ensureAuthState(db) {
   if (!Array.isArray(db.users)) db.users = [];
@@ -94,7 +104,8 @@ function parseCookies(req) {
     const i = part.indexOf('=');
     if (i < 0) return out;
     const key = part.slice(0, i).trim();
-    const value = decodeURIComponent(part.slice(i + 1).trim());
+    let value = part.slice(i + 1).trim();
+    try { value = decodeURIComponent(value); } catch { /* Ignore malformed cookie encoding. */ }
     if (key) out[key] = value;
     return out;
   }, {});
@@ -102,22 +113,35 @@ function parseCookies(req) {
 
 function setSessionCookie(res, token) {
   const secure = process.env.NODE_ENV === 'production';
-  const sameSite = secure ? 'None' : 'Lax';
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? '; Secure' : ''}`);
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? '; Secure' : ''}`);
 }
 
 function clearSessionCookie(res) {
   const secure = process.env.NODE_ENV === 'production';
-  const sameSite = secure ? 'None' : 'Lax';
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure ? '; Secure' : ''}`);
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`);
 }
 
 async function ensureDefaultAdmin() {
   const db = ensureAuthState(await readDB());
   const existing = db.users.find(u => String(u.username || '').toLowerCase() === DEFAULT_ADMIN_USERNAME);
-  if (existing) return db;
-
-  const credentials = { salt: DEFAULT_ADMIN_SALT, hash: DEFAULT_ADMIN_HASH };
+  // Never create an account with a password baked into source control. On an
+  // empty database, provision the owner account only when an operator has set
+  // an out-of-band bootstrap password in the deployment environment.
+  const initialPassword = process.env.INITIAL_ADMIN_PASSWORD;
+  if (existing) {
+    if (existing.passwordSalt === LEGACY_BOOTSTRAP_SALT && initialPassword) {
+      if (initialPassword.length < 12) throw new Error('INITIAL_ADMIN_PASSWORD must be at least 12 characters.');
+      const credentials = hashPassword(initialPassword);
+      existing.passwordSalt = credentials.salt;
+      existing.passwordHash = credentials.hash;
+      db.sessions = db.sessions.filter(session => session.userId !== existing.id);
+      await writeDB(db);
+    }
+    return db;
+  }
+  if (!initialPassword) return db;
+  if (initialPassword.length < 12) throw new Error('INITIAL_ADMIN_PASSWORD must be at least 12 characters.');
+  const credentials = hashPassword(initialPassword);
   db.users.push({
     id: `user-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
     username: DEFAULT_ADMIN_USERNAME,
@@ -132,6 +156,43 @@ async function ensureDefaultAdmin() {
   });
   await writeDB(db);
   return db;
+}
+
+function originIsAllowed(req) {
+  const origin = req.get('origin');
+  if (origin) {
+    try {
+      if (new URL(origin).host.toLowerCase() !== String(req.get('host') || '').toLowerCase()) return false;
+    } catch {
+      return false;
+    }
+  }
+  return req.get('sec-fetch-site') !== 'cross-site';
+}
+
+function loginKey(username) {
+  return crypto.createHash('sha256').update(String(username || '').trim().toLowerCase()).digest('hex');
+}
+
+function loginIsBlocked(key, now = Date.now()) {
+  const state = loginFailures.get(key);
+  if (!state) return false;
+  if (now - state.startedAt >= LOGIN_FAILURE_WINDOW_MS) {
+    loginFailures.delete(key);
+    return false;
+  }
+  return state.count >= LOGIN_FAILURE_LIMIT;
+}
+
+function recordLoginFailure(key, now = Date.now()) {
+  let state = loginFailures.get(key);
+  if (!state || now - state.startedAt >= LOGIN_FAILURE_WINDOW_MS) state = { startedAt: now, count: 0 };
+  state.count++;
+  loginFailures.set(key, state);
+  if (loginFailures.size > 5000) {
+    const oldestKey = loginFailures.keys().next().value;
+    if (oldestKey) loginFailures.delete(oldestKey);
+  }
 }
 
 async function getAuthenticatedUser(req) {
@@ -149,6 +210,9 @@ async function getAuthenticatedUser(req) {
 
 async function requireAuth(req, res, next) {
   try {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !originIsAllowed(req)) {
+      return res.status(403).json({ error: 'Cross-site request blocked.' });
+    }
     const user = await getAuthenticatedUser(req);
     if (!user) return res.status(401).json({ error: 'Authentication required.' });
     req.user = user;
@@ -255,11 +319,21 @@ app.post('/api/auth/login', async (req, res) => {
     db = ensureAuthState(db);
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
+    if (username.length > 128 || password.length > 1024) {
+      return res.status(400).json({ error: 'Username or password is too long.' });
+    }
+    const key = loginKey(username);
+    if (loginIsBlocked(key)) {
+      res.setHeader('Retry-After', String(Math.ceil(LOGIN_FAILURE_WINDOW_MS / 1000)));
+      return res.status(429).json({ error: 'Too many unsuccessful sign-in attempts. Please try again in 15 minutes.' });
+    }
     const user = db.users.find(u => String(u.username || '').toLowerCase() === username.toLowerCase());
 
     if (!user || user.status !== 'active' || !verifyPassword(password, user)) {
+      recordLoginFailure(key);
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
+    loginFailures.delete(key);
 
     const rawToken = crypto.randomBytes(32).toString('hex');
     db.sessions.push({
@@ -294,6 +368,7 @@ app.get('/api/auth/me', async (req, res) => {
 
 app.post('/api/auth/logout', async (req, res) => {
   try {
+    if (!originIsAllowed(req)) return res.status(403).json({ error: 'Cross-site request blocked.' });
     const token = parseCookies(req)[SESSION_COOKIE];
     if (token) {
       const db = ensureAuthState(await readDB());
@@ -322,6 +397,9 @@ app.post('/api/auth/signup', async (req, res) => {
     const password = String(req.body?.password || '');
     if (!name || !username || !password || (!email && !phone)) {
       return res.status(400).json({ error: 'Name, username, password, and at least an email or phone number are required.' });
+    }
+    if (name.length > 120 || username.length > 64 || email.length > 254 || phone.length > 32 || password.length > 1024) {
+      return res.status(400).json({ error: 'One or more account fields are too long.' });
     }
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     const usernameTaken = db.users.some(u => String(u.username || '').toLowerCase() === username.toLowerCase());
@@ -361,6 +439,7 @@ app.post('/api/auth/users', requireAuth, requireAdmin, async (req, res) => {
     if (role === 'staff' && req.user.role !== 'admin') return res.status(403).json({ error: 'Only Admin can create Staff accounts.' });
     const password = String(req.body?.password || '');
     if (!name || !username || !password || (!email && !phone)) return res.status(400).json({ error: 'Name, username, password, and email or phone are required.' });
+    if (name.length > 120 || username.length > 64 || email.length > 254 || phone.length > 32 || password.length > 1024) return res.status(400).json({ error:'One or more account fields are too long.' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     if (db.users.some(u => String(u.username || '').toLowerCase() === username.toLowerCase())) return res.status(409).json({ error: 'Username is already registered.' });
     if (email && db.users.some(u => String(u.email || '').toLowerCase() === email)) return res.status(409).json({ error: 'Email is already registered.' });
@@ -379,6 +458,9 @@ app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
     const user = db.users.find(u => u.id === req.params.id);
     if (!user) return res.status(404).json({ error:'User not found.' });
     if (user.role === 'admin' && req.user.id !== user.id) return res.status(403).json({ error:'Admin account cannot be edited by another user here.' });
+    if (req.body?.name !== undefined && String(req.body.name).length > 120) return res.status(400).json({ error:'Name is too long.' });
+    if (req.body?.email !== undefined && String(req.body.email).length > 254) return res.status(400).json({ error:'Email is too long.' });
+    if (req.body?.phone !== undefined && String(req.body.phone).length > 32) return res.status(400).json({ error:'Phone is too long.' });
     if (req.body?.name !== undefined) user.name = String(req.body.name).trim();
     if (req.body?.email !== undefined) user.email = String(req.body.email).trim().toLowerCase();
     if (req.body?.phone !== undefined) user.phone = String(req.body.phone).trim();
@@ -389,10 +471,14 @@ app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
       user.status = req.body.status;
     }
     if (req.body?.role && req.user.role === 'admin' && ['staff','supporter'].includes(req.body.role)) user.role = req.body.role;
+    let passwordChanged = false;
     if (req.body?.password) {
+      if (String(req.body.password).length > 1024) return res.status(400).json({ error:'Password is too long.' });
       if (String(req.body.password).length < 8) return res.status(400).json({ error:'Password must be at least 8 characters.' });
       const credentials = hashPassword(req.body.password); user.passwordSalt=credentials.salt; user.passwordHash=credentials.hash;
+      passwordChanged = true;
     }
+    if (passwordChanged) db.sessions = db.sessions.filter(session => session.userId !== user.id);
     addAudit(db, req, req.body?.status ? 'USER_STATUS_CHANGED' : 'USER_UPDATED', { userId:user.id, username:user.username, status:user.status });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });
@@ -467,10 +553,10 @@ app.delete('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) =>
 
 app.get('/api/health', async (req, res) => {
   try {
-    const db = normalizeDB(await readDB());
-    res.json({ ok: true, mode: getDatabaseMode(), quarters: db.quarters.length, latestQuarter: db.quarters.at(-1)?.id || null });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    await readDB();
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ ok: false });
   }
 });
 
@@ -731,8 +817,8 @@ async function runScheduledNotifications() {
 app.get('/api/notifications/cron', async (req, res) => {
   const expected = process.env.CRON_SECRET;
   const auth = req.headers.authorization || '';
-  if (!expected && process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'CRON_SECRET is not configured.' });
-  if (expected && auth !== `Bearer ${expected}`) return res.status(401).json({ error: 'Unauthorized cron request.' });
+  if (!expected) return res.status(503).json({ error: 'CRON_SECRET is not configured.' });
+  if (auth !== `Bearer ${expected}`) return res.status(401).json({ error: 'Unauthorized cron request.' });
   try {
     const result = await runScheduledNotifications();
     res.json({ ok: true, result });
@@ -1088,8 +1174,11 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
     const { year, quarterNum, copyFromQuarterId } = req.body;
     if (!year || !quarterNum) return res.status(400).json({ error: 'Year and Quarter Number are required' });
 
-    const qNum = parseInt(quarterNum);
-    const yr = parseInt(year);
+    const qNum = Number(quarterNum);
+    const yr = Number(year);
+    if (!Number.isInteger(qNum) || qNum < 1 || qNum > 4 || !Number.isInteger(yr) || yr < 1900 || yr > 2200) {
+      return res.status(400).json({ error: 'Enter a valid year and quarter number (1–4).' });
+    }
     const qKey = `${yr}-Q${qNum}`;
 
     const db = normalizeDB(await readDB());
@@ -1171,13 +1260,15 @@ app.delete('/api/quarters/:id', requireStaff, async (req, res) => {
 app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
   try {
     const { name, number, m1, m2, m3, notes, pastorType, addToAllQuarters } = req.body;
-    if (!name || !name.trim()) return res.status(400).json({ error: 'Pastor name is required' });
+    const requestedName = String(name || '').trim();
+    if (!requestedName) return res.status(400).json({ error: 'Pastor name is required' });
+    if (requestedName.length > 120 || String(notes || '').length > 2000) return res.status(400).json({ error: 'Pastor name or notes are too long.' });
 
     const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
 
-    const pastorName = name.trim();
+    const pastorName = requestedName;
     const effectivePastorType = pastorTypeForNewOccurrence(db, pastorName, pastorType);
     const maxNumber = quarter.entries.reduce((max, e) => Math.max(max, Number(e.number) || 0), 0);
     const num = number ? parseInt(number) : (maxNumber + 1);
@@ -1263,6 +1354,7 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
       hidden: hidden !== undefined ? Boolean(hidden) : (included !== undefined ? !Boolean(included) : entry.hidden === true)
     };
     if (!candidate.name) return res.status(400).json({ error: 'Pastor name is required' });
+    if (candidate.name.length > 120 || candidate.notes.length > 2000) return res.status(400).json({ error: 'Pastor name or notes are too long.' });
     if (!Number.isFinite(candidate.number) || candidate.number < 1) return res.status(400).json({ error: 'Pastor number must be a positive number' });
 
     const changes = [];

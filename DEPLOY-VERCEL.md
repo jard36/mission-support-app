@@ -10,8 +10,9 @@ The JSON database remains the local fallback and seed data for a new Neon databa
 2. In Vercel, create or update the project from that repository. Set **Framework Preset** to **Next.js** and keep the default build and output settings.
 3. Add the Neon integration/storage and connect it to this project.
 4. Ensure `DATABASE_URL` is available in the Vercel environment.
-5. Deploy.
-6. Visit `/api/health` on the deployed URL. It should report `ok: true`, `database: "neon-postgres"`, and 14 quarters when the included seed data is used.
+5. Set `CRON_SECRET` in Vercel so the scheduled reminder endpoint accepts authenticated Vercel Cron requests. For a new empty database, also set `INITIAL_ADMIN_PASSWORD` before the first sign-in. To rotate the original fixed bootstrap credential in an existing database, set `INITIAL_ADMIN_PASSWORD` before the first request after deploying; the rotation expires active sessions, so sign in with the new value.
+6. Deploy.
+7. Visit `/api/health` on the deployed URL. It returns `ok: true` when the database is reachable.
 
 The daily Vercel Cron schedule for `/api/notifications/cron` remains configured in `vercel.json` (00:00 UTC / 08:00 Philippines time).
 
@@ -26,6 +27,7 @@ For a production-style local run, use `npm run build` followed by `npm start`.
 Do not commit these values to GitHub. Set them in Vercel Project Settings → Environment Variables, or use a local `.env` file (which is ignored by Git).
 
 - `DATABASE_URL` — Neon Postgres connection string.
+- `INITIAL_ADMIN_PASSWORD` — bootstrap secret for a database without the `jarred` account. Setting it also rotates the original fixed bootstrap credential on the next auth request. Use at least 12 characters; other existing admin passwords are unchanged.
 - `RESEND_API_KEY` — Resend API key.
 - `RESEND_FROM_EMAIL` — verified sender address.
 - `IPROG_SMS_API_TOKEN` — IPROG SMS API token.
