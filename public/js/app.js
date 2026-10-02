@@ -1144,6 +1144,11 @@ function renderAllView() {
   state.allQuarters.forEach(q => {
     const entries = filterEntriesForDisplay(q, q.entries || []);
     if (!entries.length) return;
+    // Keep display numbering tied to the included roster, not the permanent
+    // record number. Hidden pastors retain their original number for restore.
+    const displayNumbers = new Map((q.entries || [])
+      .filter(entry => entry.hidden !== true)
+      .map((entry, index) => [entry.id, index + 1]));
     html += `<div class="all-quarter-card">
       <div class="all-quarter-heading"><div><strong>${escapeHtml(q.title)}</strong><span>${escapeHtml((q.months||[]).join(' • '))}</span></div><span>${entries.length} of ${(q.entries||[]).length} pastors</span></div>
       <div class="table-responsive"><table class="data-table all-quarter-table"><thead><tr><th style="width:70px;">#</th><th>Pastor / Missionary</th><th>TYPE</th>${(q.months||[]).slice(0,3).map(m=>`<th style="text-align:center;">${escapeHtml(m).toUpperCase()}</th>`).join('')}<th style="text-align:center;">STATUS</th></tr></thead><tbody>`;
@@ -1151,7 +1156,7 @@ function renderAllView() {
       const vals=[e.m1,e.m2,e.m3]; const badge=renderStatusBadge(e); const type=normalizePastorType(e.pastorType);
       const assignedSlots = currentUser?.role === 'supporter' ? (e.supporterAssignedSlots || []) : [];
       const slotLabel = assignedSlots.length ? `<span class="supporter-slot-label">Your support: ${assignedSlots.map(escapeHtml).join(', ')}</span>` : '';
-      html += `<tr><td>${e.number || idx+1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
+      html += `<tr><td>${displayNumbers.get(e.id) || idx + 1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
     });
     html += '</tbody></table></div></div>';
   });
@@ -1208,6 +1213,9 @@ function renderTable() {
   if (!state.currentQuarter) return;
   const entries = state.currentQuarter.entries || [];
   const filtered = filterEntriesForDisplay(state.currentQuarter, entries);
+  const displayNumbers = new Map(entries
+    .filter(entry => entry.hidden !== true)
+    .map((entry, index) => [entry.id, index + 1]));
   state.filteredEntries = filtered;
   visibleCount.textContent = `${filtered.length} of ${entries.length} pastors`;
 
@@ -1224,7 +1232,7 @@ function renderTable() {
     const type = normalizePastorType(e.pastorType);
     html += `
       <tr data-id="${escapeHtml(e.id)}">
-        <td style="color: var(--text-subtle); font-weight: 700;">${e.number || (idx + 1)}</td>
+        <td style="color: var(--text-subtle); font-weight: 700;">${displayNumbers.get(e.id) || (idx + 1)}</td>
         <td>
           <div class="pastor-name-cell ${currentUser?.role === 'supporter' ? '' : 'pastor-name-editable'}" ${currentUser?.role === 'supporter' ? '' : `onclick="editPastor('${e.id}')" title="Click to edit pastor"`}>
             <strong>${escapeHtml(e.name)}</strong>

@@ -880,6 +880,37 @@ function normalizeDB(db) {
   return db;
 }
 
+// One-time roster migration requested by the church: preserve each quarter's
+// original order and support marks, while excluding Arellano, Jack from every
+// quarter that already exists. The marker keeps later per-quarter restores
+// from being hidden again on subsequent requests.
+function hideArellanoJackAcrossExistingQuarters(db) {
+  const migrationKey = 'hide-arellano-jack-across-existing-quarters-v1';
+  if (!db.migrations || typeof db.migrations !== 'object' || Array.isArray(db.migrations)) db.migrations = {};
+  if (db.migrations[migrationKey]) return null;
+
+  let hiddenCount = 0;
+  let affectedQuarters = 0;
+  for (const quarter of db.quarters) {
+    let quarterChanged = false;
+    for (const entry of quarter.entries) {
+      const name = String(entry.name || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+      if (name !== 'arellano, jack' || entry.hidden === true) continue;
+      entry.hidden = true;
+      hiddenCount += 1;
+      quarterChanged = true;
+    }
+    if (quarterChanged) affectedQuarters += 1;
+  }
+
+  db.migrations[migrationKey] = {
+    completedAt: new Date().toISOString(),
+    hiddenCount,
+    affectedQuarters
+  };
+  return { hiddenCount, affectedQuarters };
+}
+
 function statusMetrics(value) {
   const text = String(value || '').trim();
   if (!text) return { checked: 0, total: 1 };
@@ -922,6 +953,15 @@ function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', cur
 app.get('/api/quarters', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
+    const jackMigration = hideArellanoJackAcrossExistingQuarters(db);
+    if (jackMigration) {
+      addAudit(db, req, 'Pastor Hidden Across Quarters', {
+        pastorName: 'Arellano, Jack',
+        affectedQuarters: jackMigration.affectedQuarters,
+        recordsHidden: jackMigration.hiddenCount
+      });
+      await writeDB(db, { touchLastUpdated: true });
+    }
     if (['admin', 'staff'].includes(req.user?.role)) await reconcileAndPersistQuarterTypes(db, req);
     if (['admin', 'staff'].includes(req.user?.role)) {
       const repaired = restoreLatestQuarterSupportSlots(db);
