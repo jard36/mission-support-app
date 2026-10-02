@@ -773,6 +773,13 @@ function pastorIdentityKey(name) {
   return String(name || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function quarterOrderValue(q) {
+  const quarterNumber = Number(String(q.id || '').match(/Q(\d+)/i)?.[1]
+    || String(q.quarterName || '').match(/(\d+)/)?.[1]
+    || 0);
+  return (Number(q.year) || 0) * 10 + quarterNumber;
+}
+
 function syncPastorTypeAcrossQuarters(db, names, pastorType, updatedAt = new Date().toISOString()) {
   const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
   const updatedQuarters = new Set();

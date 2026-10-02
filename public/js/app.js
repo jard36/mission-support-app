@@ -900,6 +900,8 @@ async function loadQuartersList() {
   try {
     const res = await fetch('/api/quarters');
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!Array.isArray(data.quarters)) throw new Error('Quarter list response is invalid');
     state.quarters = data.quarters || [];
     state.reportMode = false;
     state.reportQuarters = [];
