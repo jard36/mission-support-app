@@ -1611,8 +1611,11 @@ async function handlePastorSubmit(e) {
         if (idx !== -1) { if (data.entry.hidden) state.currentQuarter.entries.splice(idx, 1); else state.currentQuarter.entries[idx] = data.entry; }
       }
       const typeSyncCount = Array.isArray(data.typeUpdatedQuarters) ? data.typeUpdatedQuarters.length : 0;
+      const visibilitySyncCount = Array.isArray(data.visibilityUpdatedQuarters) ? data.visibilityUpdatedQuarters.length : 0;
       showToast(data.entry.hidden
-        ? 'Pastor excluded and moved to Hidden Pastors.'
+        ? `Pastor hidden in ${visibilitySyncCount || 1} quarter${(visibilitySyncCount || 1) === 1 ? '' : 's'} and moved to Hidden Pastors.`
+        : visibilitySyncCount
+          ? `Pastor included across ${visibilitySyncCount} quarter${visibilitySyncCount === 1 ? '' : 's'}. Support history preserved.`
         : typeSyncCount
           ? `Pastor type synchronized across ${typeSyncCount} quarter${typeSyncCount === 1 ? '' : 's'}.`
           : 'Pastor updated successfully!', 'success');

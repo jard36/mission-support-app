@@ -911,6 +911,43 @@ function hideArellanoJackAcrossExistingQuarters(db) {
   return { hiddenCount, affectedQuarters };
 }
 
+// Bring older per-quarter visibility edits into line with the current global
+// hide/restore behavior. If a pastor is already hidden anywhere, hide their
+// matching records in all existing quarters without changing support marks.
+function synchronizeHiddenPastorsAcrossExistingQuarters(db) {
+  const migrationKey = 'sync-hidden-pastors-across-existing-quarters-v1';
+  if (!db.migrations || typeof db.migrations !== 'object' || Array.isArray(db.migrations)) db.migrations = {};
+  if (db.migrations[migrationKey]) return null;
+
+  const hiddenIdentities = new Set();
+  db.quarters.forEach(quarter => (quarter.entries || []).forEach(entry => {
+    if (!entry.hidden) return;
+    const identity = pastorIdentityKey(entry.name);
+    if (identity) hiddenIdentities.add(identity);
+  }));
+
+  let hiddenCount = 0;
+  let affectedQuarters = 0;
+  db.quarters.forEach(quarter => {
+    let quarterChanged = false;
+    (quarter.entries || []).forEach(entry => {
+      if (entry.hidden || !hiddenIdentities.has(pastorIdentityKey(entry.name))) return;
+      entry.hidden = true;
+      hiddenCount += 1;
+      quarterChanged = true;
+    });
+    if (quarterChanged) affectedQuarters += 1;
+  });
+
+  db.migrations[migrationKey] = {
+    completedAt: new Date().toISOString(),
+    pastorCount: hiddenIdentities.size,
+    hiddenCount,
+    affectedQuarters
+  };
+  return { pastorCount: hiddenIdentities.size, hiddenCount, affectedQuarters };
+}
+
 function statusMetrics(value) {
   const text = String(value || '').trim();
   if (!text) return { checked: 0, total: 1 };
@@ -954,12 +991,23 @@ app.get('/api/quarters', async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
     const jackMigration = hideArellanoJackAcrossExistingQuarters(db);
-    if (jackMigration) {
-      addAudit(db, req, 'Pastor Hidden Across Quarters', {
-        pastorName: 'Arellano, Jack',
-        affectedQuarters: jackMigration.affectedQuarters,
-        recordsHidden: jackMigration.hiddenCount
-      });
+    const hiddenPastorMigration = synchronizeHiddenPastorsAcrossExistingQuarters(db);
+    if (jackMigration || hiddenPastorMigration) {
+      if (jackMigration) {
+        addAudit(db, req, 'Pastor Hidden Across Quarters', {
+          pastorName: 'Arellano, Jack',
+          affectedQuarters: jackMigration.affectedQuarters,
+          recordsHidden: jackMigration.hiddenCount
+        });
+      }
+      if (hiddenPastorMigration) {
+        addAudit(db, req, 'Hidden Pastors Synchronized Across Quarters', {
+          pastorCount: hiddenPastorMigration.pastorCount,
+          affectedQuarters: hiddenPastorMigration.affectedQuarters,
+          recordsHidden: hiddenPastorMigration.hiddenCount,
+          description: `Synchronized hidden status for ${hiddenPastorMigration.pastorCount} pastor${hiddenPastorMigration.pastorCount === 1 ? '' : 's'} across existing quarters.`
+        });
+      }
       await writeDB(db, { touchLastUpdated: true });
     }
     if (['admin', 'staff'].includes(req.user?.role)) await reconcileAndPersistQuarterTypes(db, req);
@@ -1215,7 +1263,7 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
       const after = candidate[key] ?? '';
       if (String(before[key] ?? '') !== String(after)) {
         const monthName = key === 'm1' ? quarter.months?.[0] : key === 'm2' ? quarter.months?.[1] : key === 'm3' ? quarter.months?.[2] : null;
-        changes.push({ field: key === 'hidden' ? (after ? 'included' : 'hidden') : (monthName || key), from: before[key] ?? '', to: after });
+        changes.push({ field: key === 'hidden' ? (after ? 'hidden' : 'included') : (monthName || key), from: before[key] ?? '', to: after });
       }
     });
 
@@ -1226,6 +1274,26 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
     Object.assign(entry, candidate);
     entry.rawName = `${entry.number}. ${entry.name}`;
     entry.updatedAt = new Date().toISOString();
+
+    // Include/exclude is a pastor-wide choice. Apply it to every matching
+    // quarter record while leaving each quarter's month marks and original
+    // order untouched. Match by name because the historical number can vary.
+    const visibilityUpdatedQuarters = [];
+    const visibilityChanged = before.hidden !== candidate.hidden;
+    if (visibilityChanged) {
+      const identity = pastorIdentityKey(before.name);
+      db.quarters.forEach(otherQuarter => {
+        let quarterChanged = otherQuarter.id === quarter.id;
+        (otherQuarter.entries || []).forEach(otherEntry => {
+          if (otherEntry.id === entry.id && otherQuarter.id === quarter.id) return;
+          if (pastorIdentityKey(otherEntry.name) !== identity || otherEntry.hidden === candidate.hidden) return;
+          otherEntry.hidden = candidate.hidden;
+          otherEntry.updatedAt = entry.updatedAt;
+          quarterChanged = true;
+        });
+        if (quarterChanged) visibilityUpdatedQuarters.push(otherQuarter.id);
+      });
+    }
 
     let typeUpdatedQuarters = [];
     if (before.pastorType !== candidate.pastorType) {
@@ -1240,13 +1308,15 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
       entryId: entry.id,
       pastorName: entry.name,
       changes,
-      description: changes.some(change => change.field === 'pastorType')
+      description: visibilityChanged
+        ? `${entry.name} was ${candidate.hidden ? 'hidden' : 'included'} across ${visibilityUpdatedQuarters.length} quarter${visibilityUpdatedQuarters.length === 1 ? '' : 's'}`
+        : changes.some(change => change.field === 'pastorType')
         ? `${entry.name}'s pastor type was updated across ${Math.max(1, typeUpdatedQuarters.length)} quarter${typeUpdatedQuarters.length === 1 ? '' : 's'}`
         : `${entry.name} was updated in ${quarter.id}`
     });
 
     await writeDB(db, { touchLastUpdated: true });
-    res.json({ entry, lastUpdated: db.lastUpdated, typeUpdatedQuarters });
+    res.json({ entry, lastUpdated: db.lastUpdated, typeUpdatedQuarters, visibilityUpdatedQuarters });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
