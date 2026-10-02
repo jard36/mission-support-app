@@ -1337,18 +1337,59 @@ app.post('/api/quarters/:quarterId/batch-save', requireStaff, async (req, res) =
 app.get('/api/hidden-pastors', requireStaff, async (req, res) => {
   try {
     const db = normalizeDB(await readDB());
-    const hidden = [];
+    const hiddenByIdentity = new Map();
     db.quarters.forEach(q => (q.entries || []).filter(e => e.hidden).forEach(entry => {
-      hidden.push({
-        ...entry,
-        quarterId: q.id,
-        quarterTitle: q.title,
-        year: q.year,
-        quarterName: q.quarterName
-      });
+      const identity = pastorIdentityKey(entry.name);
+      if (!identity) return;
+      let pastor = hiddenByIdentity.get(identity);
+      if (!pastor) {
+        pastor = { name: String(entry.name || '').trim(), quarterCount: 0 };
+        hiddenByIdentity.set(identity, pastor);
+      }
+      pastor.quarterCount += 1;
     }));
-    hidden.sort((a, b) => `${b.year}-${b.quarterId}`.localeCompare(`${a.year}-${a.quarterId}`) || (Number(a.number) - Number(b.number)));
+    const hidden = [...hiddenByIdentity.values()].sort((a, b) => a.name.localeCompare(b.name));
     res.json({ hidden });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Restore one pastor identity across every quarter where that identity is hidden.
+// Quarter entries remain separate so each year's support history is preserved.
+app.post('/api/hidden-pastors/include', requireStaff, async (req, res) => {
+  try {
+    const requestedName = String(req.body?.name || '').trim();
+    const identity = pastorIdentityKey(requestedName);
+    if (!identity) return res.status(400).json({ error: 'Pastor name is required.' });
+
+    const db = normalizeDB(await readDB());
+    const restoredQuarterIds = [];
+    let restoredCount = 0;
+    db.quarters.forEach(quarter => {
+      let changed = false;
+      (quarter.entries || []).forEach(entry => {
+        if (!entry.hidden || pastorIdentityKey(entry.name) !== identity) return;
+        entry.hidden = false;
+        restoredCount += 1;
+        changed = true;
+      });
+      if (changed) restoredQuarterIds.push(quarter.id);
+    });
+    if (!restoredCount) return res.status(404).json({ error: 'No hidden records were found for that pastor.' });
+
+    addAudit(db, req, 'Pastor Included Across Quarters', {
+      pastorName: requestedName,
+      restoredCount,
+      restoredQuarterIds,
+      description: `Included ${requestedName} in ${restoredQuarterIds.length} quarter${restoredQuarterIds.length === 1 ? '' : 's'}; existing support marks were preserved.`
+    });
+    await writeDB(db, { touchLastUpdated: true });
+    res.json({
+      message: 'Pastor included across quarters.',
+      name: requestedName,
+      restoredCount,
+      restoredQuarterIds,
+      lastUpdated: db.lastUpdated
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

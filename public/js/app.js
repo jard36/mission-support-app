@@ -1803,12 +1803,11 @@ async function loadHiddenPastors() {
     list.innerHTML = items.map(item => `
       <div class="hidden-pastor-row">
         <div class="hidden-pastor-main">
-          <strong>${escapeHtml(item.number ? `${item.number}. ${item.name}` : item.name)}</strong>
-          <small>${escapeHtml(item.quarterTitle || item.quarterId)} • ${escapeHtml(normalizePastorType(item.pastorType))}</small>
+          <strong>${escapeHtml(item.name)}</strong>
+          <small>Hidden in ${item.quarterCount} quarter${item.quarterCount === 1 ? '' : 's'} • Support history retained</small>
         </div>
         <div class="hidden-pastor-actions">
-          <button class="btn btn-sm btn-outline" onclick="editHiddenPastor('${escapeHtml(item.quarterId)}','${escapeHtml(item.id)}')"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
-          <button class="btn btn-sm btn-primary" onclick="restoreHiddenPastor('${escapeHtml(item.quarterId)}','${escapeHtml(item.id)}')"><i class="fa-solid fa-eye"></i> Include</button>
+          <button class="btn btn-sm btn-primary" onclick="restoreHiddenPastor('${encodeURIComponent(item.name).replace(/'/g, '%27')}')"><i class="fa-solid fa-eye"></i> Include All Quarters</button>
         </div>
       </div>`).join('');
   } catch (err) { list.innerHTML = `<div class="audit-empty">${escapeHtml(err.message)}</div>`; }
@@ -1838,17 +1837,35 @@ async function editHiddenPastor(quarterId, entryId) {
   } catch (err) { showToast(err.message, 'error'); }
 }
 
-async function restoreHiddenPastor(quarterId, entryId) {
+async function restoreHiddenPastor(encodedName) {
+  const name = decodeURIComponent(encodedName);
   try {
-    const res = await fetch(`/api/quarters/${encodeURIComponent(quarterId)}/entries/${encodeURIComponent(entryId)}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ included: true })
+    const res = await fetch('/api/hidden-pastors/include', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Unable to include pastor');
     updateLastUpdated(data.lastUpdated);
-    showToast(`${data.entry.name} is included again.`, 'success');
+    showToast(`${data.name} included in ${data.restoredQuarterIds.length} quarter${data.restoredQuarterIds.length === 1 ? '' : 's'}. Support history preserved.`, 'success');
     await loadHiddenPastors();
-    if (state.currentQuarter?.id === quarterId) await loadQuarterDetails(quarterId);
+    const summaryRes = await fetch('/api/quarters');
+    const summary = await summaryRes.json();
+    if (!summaryRes.ok) throw new Error(summary.error || 'Unable to refresh quarter list');
+    state.quarters = summary.quarters || [];
+    updateLastUpdated(summary.lastUpdated || data.lastUpdated);
+    renderYearPills();
+    populateQuarterDropdown();
+
+    const refreshesCurrentView = state.allMode || (state.currentQuarter && data.restoredQuarterIds.includes(state.currentQuarter.id));
+    if (!hasPendingChanges()) {
+      if (state.allMode) await loadAllQuarterDetails();
+      else if (state.currentQuarter && data.restoredQuarterIds.includes(state.currentQuarter.id)) {
+        quarterSelect.value = state.currentQuarter.id;
+        await loadQuarterDetails(state.currentQuarter.id);
+      }
+    } else if (refreshesCurrentView) {
+      showToast('Support edits are still pending. Save them, then reload the quarter to see the restored pastor.', 'info');
+    }
   } catch (err) { showToast('Include failed: ' + err.message, 'error'); }
 }
 
