@@ -977,10 +977,10 @@ function isEntryComplete(entry) {
   return m.total > 0 && m.checked === m.total;
 }
 
-function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', currentLatest = false } = {}) {
+function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All' } = {}) {
   let entries = (q.entries || []).map(normalizeEntry).filter(e => !e.hidden);
   if (pastorType && pastorType !== 'All') entries = entries.filter(e => e.pastorType === pastorType);
-  if (statusFilter && statusFilter !== 'All' && !currentLatest) {
+  if (statusFilter && statusFilter !== 'All') {
     entries = entries.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
   }
   return entries;
@@ -1604,44 +1604,10 @@ function pptStatusFontSize(value) {
 }
 
 function filtersForQuarter(q, filters = {}) {
-  const latestId = filters.latestQuarterId || null;
   return {
     pastorType: filters.pastorType || 'All',
-    statusFilter: filters.statusFilter || 'All',
-    currentLatest: Boolean(latestId && q.id === latestId)
+    statusFilter: filters.statusFilter || 'All'
   };
-}
-
-function quarterOrderValue(q) {
-  const quarterNumber = Number(String(q.id || '').match(/Q(\d+)/i)?.[1]
-    || String(q.quarterName || '').match(/(\d+)/)?.[1]
-    || 0);
-  return (Number(q.year) || 0) * 10 + quarterNumber;
-}
-
-function deduplicateIncompleteQuarters(quarterList, filters = {}) {
-  const quarters = [...quarterList].sort((a, b) => quarterOrderValue(a) - quarterOrderValue(b));
-  const pastorAssignments = new Map();
-  quarters.forEach(q => {
-    // Keep the current quarter's full roster, even when all of its boxes are
-    // checked, to match the report builder's latest-quarter behavior.
-    const quarterFilters = filtersForQuarter(q, { ...filters, statusFilter: 'Incomplete Only' });
-    filterQuarterEntries(q, quarterFilters).forEach(entry => {
-      const key = pastorIdentityKey(entry.name);
-      if (key) pastorAssignments.set(key, { quarterId: q.id, entry });
-    });
-  });
-
-  let sequence = 1;
-  return quarters.map(q => {
-    const entries = [...pastorAssignments.values()]
-      .filter(assignment => assignment.quarterId === q.id)
-      .map(assignment => assignment.entry)
-      .sort((a, b) => (Number(a.number) || Number.MAX_SAFE_INTEGER) - (Number(b.number) || Number.MAX_SAFE_INTEGER)
-        || String(a.name).localeCompare(String(b.name)))
-      .map(entry => ({ ...entry, number: sequence++ }));
-    return entries.length ? { ...q, entries } : null;
-  }).filter(Boolean);
 }
 
 async function buildPptx(quarterList, filters = {}) {
@@ -1664,8 +1630,26 @@ async function buildPptx(quarterList, filters = {}) {
     path.join(process.cwd(), 'public', 'images', 'logo.png'),
     path.join(__dirname, 'public', 'images', 'logo.png'),
   ].find((candidate) => fs.existsSync(candidate));
-  if (quarterList.length > 1 && filters.statusFilter === 'Incomplete Only') {
-    quarterList = deduplicateIncompleteQuarters(quarterList, filters);
+  // Filter each quarter independently so a pastor's incomplete marks in one
+  // quarter do not hide that quarter when their record exists in another.
+  // This also keeps the latest quarter subject to Incomplete Only in reports.
+  quarterList = quarterList
+    .map(q => ({
+      ...q,
+      entries: filterQuarterEntries(q, filtersForQuarter(q, filters))
+        .map((entry, index) => ({ ...entry, number: index + 1 }))
+    }))
+    .filter(q => q.entries.length > 0);
+  if (!quarterList.length) {
+    const slide = pptx.addSlide();
+    slide.background = { color: '26143F' };
+    slide.addText(filters.statusFilter === 'Incomplete Only'
+      ? 'NO INCOMPLETE SUPPORT RECORDS'
+      : 'NO SUPPORT RECORDS', {
+      x: 0.8, y: 2.65, w: 11.733, h: 0.8,
+      fontSize: 28, bold: true, color: 'FFFFFF', align: 'center', valign: 'mid', fit: 'shrink'
+    });
+    return pptx;
   }
   const MARGIN = 0.85;
   const CONTENT_W = SW - (MARGIN * 2);
@@ -1692,7 +1676,7 @@ async function buildPptx(quarterList, filters = {}) {
       breakLine: false, fit: 'shrink', margin: 0.02
     });
 
-    const entries = filterQuarterEntries(q, filtersForQuarter(q, filters));
+    const entries = q.entries;
     const months = q.months || ['Month 1', 'Month 2', 'Month 3'];
     const chunkSize = 3;
 

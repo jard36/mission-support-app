@@ -1104,9 +1104,9 @@ function filterEntriesForDisplay(q, entries) {
     out = out.filter(e => normalizePastorType(e.pastorType) === pastorType);
   }
 
-  // Per the tracker requirement, the latest/current quarter always remains
-  // fully visible even when an incomplete/completed status filter is chosen.
-  if (status !== 'All' && !isLatestQuarter(q)) {
+  // The live tracker keeps the latest quarter fully visible, but a Mission
+  // Report applies its chosen status filter to every selected quarter.
+  if (status !== 'All' && !(isLatestQuarter(q) && !state.reportMode)) {
     out = out.filter(e => status === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
   }
 
@@ -1723,7 +1723,7 @@ async function getReportQuarterDetails(ids) {
 function getReportFilteredEntries(q, entries, pastorType, statusFilter) {
   let out = entries || [];
   if (pastorType !== 'All') out = out.filter(e => normalizePastorType(e.pastorType) === pastorType);
-  if (statusFilter !== 'All' && !isLatestQuarter(q)) {
+  if (statusFilter !== 'All') {
     out = out.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
   }
   return out;
