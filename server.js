@@ -396,29 +396,28 @@ function clearSupportSlotChecks(value, fallbackSlots = []) {
   return slots.length ? slots.map(slot => `${slot}.`).join(' ') : '';
 }
 
-// A quarter created from another quarter should retain the lettered supporter
-// slots, but its support checks always start empty. Older newly-created
-// quarters may already exist without those labels, so repair the latest one
-// lazily when an admin/staff user opens the quarter list.
-function restoreLatestQuarterSupportSlots(db) {
-  const quarters = Array.isArray(db?.quarters) ? db.quarters : [];
-  if (quarters.length < 2) return 0;
-  const latest = quarters[quarters.length - 1];
-  const previous = quarters[quarters.length - 2];
-  if (!latest || !previous) return 0;
+// Keep supporter-slot structure consistent across every existing year and
+// quarter. Each quarter retains its own checked marks; newly restored labels
+// begin unchecked where that quarter had no corresponding slot history.
+function reconcilePastorSupportSlotsAcrossQuarters(db) {
+  const namesByIdentity = new Map();
+  (db.quarters || []).forEach(quarter => (quarter.entries || []).forEach(entry => {
+    const identity = pastorIdentityKey(entry.name);
+    if (identity && !namesByIdentity.has(identity)) namesByIdentity.set(identity, entry.name);
+  }));
 
-  let repaired = 0;
-  for (const entry of latest.entries || []) {
-    if (entry.hidden || ['m1', 'm2', 'm3'].some(key => String(entry[key] || '').trim())) continue;
-    const candidates = (previous.entries || []).filter(source => !source.hidden && String(source.name || '').trim().toLowerCase() === String(entry.name || '').trim().toLowerCase());
-    const source = candidates.find(candidate => String(candidate.number || '') === String(entry.number || '')) || (candidates.length === 1 ? candidates[0] : null);
-    if (!source) continue;
-    const slots = getEntrySupportSlots(source);
-    if (slots.length < 2) continue;
-    for (const key of ['m1', 'm2', 'm3']) entry[key] = clearSupportSlotChecks(source[key], slots);
-    repaired++;
+  const quarterIds = new Set();
+  let updatedEntries = 0;
+  for (const name of namesByIdentity.values()) {
+    const labels = globalPastorSlots(db, [name]);
+    if (!labels.length) continue;
+    const disabled = new Set(globalDisabledPastorSlots(db, [name]));
+    const config = labels.map(label => ({ label, enabled: !disabled.has(label) }));
+    const result = syncPastorSupportSlotsAcrossQuarters(db, [name], config);
+    updatedEntries += result.updatedEntries;
+    result.quarterIds.forEach(id => quarterIds.add(id));
   }
-  return repaired;
+  return { quarterIds: [...quarterIds], updatedEntries };
 }
 
 function filterQuarterForUser(q, user, db = null) {
@@ -1059,6 +1058,20 @@ function syncPastorSupportSlotsAcrossQuarters(db, names, slotConfig, updatedAt =
   return { quarterIds: [...updatedQuarters], updatedEntries, labels, disabled };
 }
 
+function pastorSupportSlotsNeedSync(db, names, slotConfig) {
+  const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
+  const labels = normalizeSlotLabels(slotConfig.map(slot => slot.label));
+  const disabled = normalizeSlotLabels(slotConfig.filter(slot => !slot.enabled).map(slot => slot.label));
+  return (db.quarters || []).some(quarter => (quarter.entries || []).some(entry => {
+    if (!identities.has(pastorIdentityKey(entry.name))) return false;
+    const monthValuesOutOfSync = ['m1', 'm2', 'm3'].some(key =>
+      statusWithSupportSlots(entry[key], labels) !== String(entry[key] || '')
+    );
+    const disabledStateOutOfSync = JSON.stringify(normalizeSlotLabels(entry.disabledSupportSlots)) !== JSON.stringify(disabled);
+    return monthValuesOutOfSync || disabledStateOutOfSync;
+  }));
+}
+
 function isSupportSlotEnabledForPastor(db, name, number, slot) {
   const latest = latestPastorRecord(db, name, number);
   return Boolean(latest && !latest.hidden && getEnabledEntrySupportSlots(latest).includes(String(slot || '').trim().toUpperCase()));
@@ -1292,11 +1305,12 @@ app.get('/api/quarters', async (req, res) => {
     }
     if (['admin', 'staff'].includes(req.user?.role)) await reconcileAndPersistQuarterTypes(db, req);
     if (['admin', 'staff'].includes(req.user?.role)) {
-      const repaired = restoreLatestQuarterSupportSlots(db);
-      if (repaired) {
-        addAudit(db, req, 'Quarter Support Slots Restored', {
-          quarterId: db.quarters.at(-1)?.id,
-          description: `Restored blank supporter slot labels for ${repaired} pastor record${repaired === 1 ? '' : 's'}`
+      const reconciled = reconcilePastorSupportSlotsAcrossQuarters(db);
+      if (reconciled.updatedEntries) {
+        addAudit(db, req, 'Pastor Supporter Slots Reconciled', {
+          affectedQuarters: reconciled.quarterIds.length,
+          updatedEntries: reconciled.updatedEntries,
+          description: `Synchronized supporter slots and preserved quarter-specific checks across ${reconciled.quarterIds.length} quarter${reconciled.quarterIds.length === 1 ? '' : 's'}`
         });
         await writeDB(db, { touchLastUpdated: true });
       }
@@ -1341,11 +1355,12 @@ app.get('/api/quarters/:id', async (req, res) => {
     const db = normalizeDB(await readDB());
     if (['admin', 'staff'].includes(req.user?.role)) await reconcileAndPersistQuarterTypes(db, req);
     if (['admin', 'staff'].includes(req.user?.role)) {
-      const repaired = restoreLatestQuarterSupportSlots(db);
-      if (repaired) {
-        addAudit(db, req, 'Quarter Support Slots Restored', {
-          quarterId: db.quarters.at(-1)?.id,
-          description: `Restored blank supporter slot labels for ${repaired} pastor record${repaired === 1 ? '' : 's'}`
+      const reconciled = reconcilePastorSupportSlotsAcrossQuarters(db);
+      if (reconciled.updatedEntries) {
+        addAudit(db, req, 'Pastor Supporter Slots Reconciled', {
+          affectedQuarters: reconciled.quarterIds.length,
+          updatedEntries: reconciled.updatedEntries,
+          description: `Synchronized supporter slots and preserved quarter-specific checks across ${reconciled.quarterIds.length} quarter${reconciled.quarterIds.length === 1 ? '' : 's'}`
         });
         await writeDB(db, { touchLastUpdated: true });
       }
@@ -1569,7 +1584,8 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
     const currentDisabledSlots = new Set(globalDisabledPastorSlots(db, slotNames));
     const supportSlotsChanged = Boolean(slotConfig && (
       JSON.stringify(slotConfig.map(slot => slot.label)) !== JSON.stringify(knownSupportSlots) ||
-      JSON.stringify(slotConfig.filter(slot => !slot.enabled).map(slot => slot.label)) !== JSON.stringify([...currentDisabledSlots].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b)))
+      JSON.stringify(slotConfig.filter(slot => !slot.enabled).map(slot => slot.label)) !== JSON.stringify([...currentDisabledSlots].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b))) ||
+      pastorSupportSlotsNeedSync(db, slotNames, slotConfig)
     ));
     if (supportSlotsChanged) {
       changes.push({
