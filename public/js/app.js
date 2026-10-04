@@ -674,16 +674,25 @@ function renderUserManagement(){
 }
 function parseSupportSlotsFromPastor(entry){
   // The mission-support table is the source of truth for supporter slots.
-  // A pastor may have A/B/C/D/E/... slots, and a slot can be empty but still
+  // A pastor may have A/B/C/.../AA slots, and a slot can be empty but still
   // valid (for example: "A. ✓ B.  C."). Read every month column so the
   // assignment modal reflects all slots recorded for that pastor.
-  const slots=new Set();
-  ['m1','m2','m3'].forEach(key=>{
-    const value=String(entry?.[key]||'');
-    const matches=value.matchAll(/\b([A-Z])\s*(?:[.:)]|(?=\s*(?:✓|$)))/gi);
-    for(const match of matches) slots.add(match[1].toUpperCase());
-  });
-  return [...slots].sort((a,b)=>a.localeCompare(b));
+  const slots=new Set(Array.isArray(entry?.supportSlots)?entry.supportSlots.map(label=>String(label).toUpperCase()):[]);
+  ['m1','m2','m3'].forEach(key=>parseLetterStatuses(entry?.[key]).forEach(item=>slots.add(item.letter)));
+  const disabled=new Set((entry?.disabledSupportSlots||[]).map(label=>String(label).toUpperCase()));
+  return [...slots].filter(label=>!disabled.has(label)).sort((a,b)=>supportSlotPosition(a)-supportSlotPosition(b));
+}
+
+function supportSlotPosition(label){
+  let value=0;
+  for(const char of String(label||'').toUpperCase()) value=value*26+char.charCodeAt(0)-64;
+  return value;
+}
+
+function supportSlotLabel(position){
+  let value=Math.max(1,Number(position)||1), label='';
+  while(value>0){value-=1;label=String.fromCharCode(65+(value%26))+label;value=Math.floor(value/26);}
+  return label;
 }
 function assignmentKey(p){
   return `${p.number||''}::${String(p.name||'').trim().toLowerCase()}::${String(p.slot||'').trim().toUpperCase()}`;
@@ -713,6 +722,8 @@ async function getPastorChoices(){
     const key=pastorBaseKey(p);
     if(seen.has(key)) return;
     const supportSlots=parseSupportSlotsFromPastor(p);
+    const hasLetteredSlots=Boolean((p.supportSlots||[]).length||['m1','m2','m3'].some(month=>parseLetterStatuses(p[month]).length));
+    if(hasLetteredSlots&&!supportSlots.length)return;
     // Keep an unlabelled assignment option when no slot letters exist so
     // select-all and individual assignment behave consistently.
     seen.set(key,{...p,supportSlots:supportSlots.length?supportSlots:['']});
@@ -858,7 +869,9 @@ async function assignSupporter(id){
   try{
     const user=managedUsers.find(x=>x.id===id); assignmentUserId=id; assignmentPastors=await getPastorChoices();
     if(!assignmentPastors.length)return showToast('No pastors available to assign.','error');
-    const existing=getUserAssignedPastors(user); assignmentSelected=new Set(existing.map(a=>assignmentKey({...a,slot:a.slot||''})));
+    const existing=getUserAssignedPastors(user);
+    const availableKeys=new Set(assignmentPastors.flatMap(p=>(p.supportSlots||['']).map(slot=>assignmentKey({...p,slot}))));
+    assignmentSelected=new Set(existing.map(a=>assignmentKey({...a,slot:a.slot||''})).filter(key=>availableKeys.has(key)));
     const modal=ensureAssignmentModal(); modal.querySelector('#assign-pastor-subtitle').textContent=`Choose the pastor and the A/B/C/etc. supporter slot for ${user?.name||'this supporter'}.`;
     modal.querySelector('#assign-pastor-search').value=''; renderAssignmentOptions(); modal.classList.add('show');
   }catch(err){showToast(err.message,'error');}
@@ -866,9 +879,7 @@ async function assignSupporter(id){
 async function saveAssignment(){
   const btn=document.getElementById('assign-pastor-save');
   if(!assignmentUserId)return;
-  if(!assignmentSelected.size)return showToast('Select at least one pastor slot.','error');
   const pastors=assignmentPastors.flatMap(p=>(p.supportSlots||['']).map(slot=>({...p,slot}))).filter(p=>assignmentSelected.has(assignmentKey(p))).map(p=>({name:p.name,number:p.number,slot:p.slot||null}));
-  if(!pastors.length)return showToast('Select at least one pastor slot.','error');
   try{btn.disabled=true;const res=await fetch(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor slot${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
 }
 async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await fetch(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
@@ -1078,7 +1089,7 @@ function normalizePastorType(value) {
 }
 
 function entryMetrics(entry) {
-  const months = [entry?.m1, entry?.m2, entry?.m3].map(statusMetrics);
+  const months = [entry?.m1, entry?.m2, entry?.m3].map(value => statusMetrics(value, entry));
   return {
     checked: months.reduce((sum, m) => sum + m.checked, 0),
     total: months.reduce((sum, m) => sum + m.total, 0)
@@ -1087,7 +1098,7 @@ function entryMetrics(entry) {
 
 function isEntryComplete(entry) {
   const m = entryMetrics(entry || {});
-  return m.total > 0 && m.checked === m.total;
+  return m.total === 0 || m.checked === m.total;
 }
 
 function isLatestQuarter(q) {
@@ -1158,7 +1169,7 @@ function renderAllView() {
       const vals=[e.m1,e.m2,e.m3]; const badge=renderStatusBadge(e); const type=normalizePastorType(e.pastorType);
       const assignedSlots = currentUser?.role === 'supporter' ? (e.supporterAssignedSlots || []) : [];
       const slotLabel = assignedSlots.length ? `<span class="supporter-slot-label">Your support: ${assignedSlots.map(escapeHtml).join(', ')}</span>` : '';
-      html += `<tr><td>${displayNumbers.get(e.id) || idx + 1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(v||''))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
+      html += `<tr><td>${displayNumbers.get(e.id) || idx + 1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(activeSupportStatus(e,v)))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
     });
     html += '</tbody></table></div></div>';
   });
@@ -1172,7 +1183,7 @@ function renderAllStats() {
   const names = qs.map(q => q.months || []).flat();
   const labels = [names[0] || 'Month 1', names[1] || 'Month 2', names[2] || 'Month 3'];
   const bars = [statM1Bar, statM2Bar, statM3Bar]; const vals=[statM1Val,statM2Val,statM3Val]; const labs=[statM1Label,statM2Label,statM3Label];
-  labels.forEach((label,i) => { labs[i].textContent=label; const entries=qs.flatMap(q=>filterEntriesForDisplay(q,q.entries||[])); const metrics=entries.reduce((a,e)=>{const m=statusMetrics(e[`m${i+1}`]);a.checked+=m.checked;a.total+=m.total;return a;},{checked:0,total:0}); const pct=metrics.total?Math.round(metrics.checked/metrics.total*100):0; vals[i].textContent=`${metrics.checked} / ${metrics.total} (${pct}%)`; bars[i].style.width=`${pct}%`; });
+  labels.forEach((label,i) => { labs[i].textContent=label; const entries=qs.flatMap(q=>filterEntriesForDisplay(q,q.entries||[])); const metrics=entries.reduce((a,e)=>{const m=statusMetrics(e[`m${i+1}`],e);a.checked+=m.checked;a.total+=m.total;return a;},{checked:0,total:0}); const pct=metrics.total?Math.round(metrics.checked/metrics.total*100):0; vals[i].textContent=`${metrics.checked} / ${metrics.total} (${pct}%)`; bars[i].style.width=`${pct}%`; });
 }
 
 function renderQuarterStats() {
@@ -1182,7 +1193,7 @@ function renderQuarterStats() {
   const total = entries.length;
 
   const monthMetrics = ['m1', 'm2', 'm3'].map(key => entries.reduce((acc, e) => {
-    const m = statusMetrics(getEffectiveStatus(e, key));
+    const m = statusMetrics(getEffectiveStatus(e, key), e);
     acc.checked += m.checked;
     acc.total += m.total;
     return acc;
@@ -1253,21 +1264,16 @@ function renderTable() {
   pastorsTbody.innerHTML = html;
 }
 
-function statusMetrics(value) {
+function statusMetrics(value, entry = null) {
   const text = String(value || '').trim();
-  if (!text) return { checked: 0, total: 1 };
-
-  const matches = [...text.matchAll(/([A-Z])\s*\./gi)];
+  const matches = parseLetterStatuses(text);
   if (matches.length) {
-    let checkedLetters = 0;
-    matches.forEach((m, i) => {
-      const start = m.index + m[0].length;
-      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-      if (/✓/.test(text.slice(start, end))) checkedLetters++;
-    });
-    return { checked: checkedLetters, total: matches.length };
+    const disabled = new Set((entry?.disabledSupportSlots || []).map(label => String(label).toUpperCase()));
+    const active = matches.filter(item => !disabled.has(item.letter));
+    return { checked: active.filter(item => item.checked).length, total: active.length };
   }
 
+  if (!text) return { checked: 0, total: 1 };
   return { checked: text.includes('✓') ? 1 : 0, total: 1 };
 }
 
@@ -1280,18 +1286,29 @@ function getEffectiveStatus(entry, monthKey) {
 }
 
 function hasCustomLetterStatus(value) {
-  return /[A-Z]\s*\./i.test(String(value || ''));
+  return /\b[A-Z]+\s*\./i.test(String(value || ''));
 }
 
 function parseLetterStatuses(value) {
   const text = String(value || '');
-  const matches = [...text.matchAll(/([A-Z])\s*\./gi)];
+  const matches = [...text.matchAll(/\b([A-Z]+)\s*\./gi)];
   if (!matches.length) return [];
   return matches.map((m, i) => {
     const start = m.index + m[0].length;
     const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
     return { letter: m[1].toUpperCase(), checked: /✓/.test(text.slice(start, end)) };
   });
+}
+
+function activeLetterStatuses(entry, value) {
+  const disabled = new Set((entry?.disabledSupportSlots || []).map(label => String(label).toUpperCase()));
+  return parseLetterStatuses(value).filter(item => !disabled.has(item.letter));
+}
+
+function activeSupportStatus(entry, value) {
+  const items = parseLetterStatuses(value);
+  if (!items.length) return String(value || '');
+  return activeLetterStatuses(entry, value).map(item => `${item.letter}. ${item.checked ? '✓' : ''}`.trimEnd()).join(' ');
 }
 
 function serializeLetterStatuses(items) {
@@ -1302,7 +1319,8 @@ function compactStatusForViewer(value) { return String(value || '').replace(/\s+
 
 function renderSupporterStatus(entry, value) {
   const text = compactStatusForViewer(value);
-  const items = parseLetterStatuses(text);
+  const items = activeLetterStatuses(entry, text);
+  if (hasCustomLetterStatus(text) && !items.length) return '<span class="viewer-status-text">—</span>';
   if (!items.length) return `<span class="viewer-status-text">${escapeHtml(text || '—')}</span>`;
   const assigned = new Set((entry.supporterAssignedSlots || []).map(slot => String(slot).toUpperCase()));
   return `<div class="viewer-slot-list" aria-label="Your assigned supporter slot is ${escapeHtml([...assigned].join(', ') || 'not specified')}">${items.map(item => {
@@ -1320,7 +1338,8 @@ function renderStatusBtn(entry, monthKey) {
 
   // Custom A/B/C/D/E statuses get individual compact checkboxes.
   if (hasCustomLetterStatus(val)) {
-    const items = parseLetterStatuses(val);
+    const items = activeLetterStatuses(entry, val);
+    if (!items.length) return '<span class="viewer-status-text">—</span>';
     return `<div class="mini-status-list ${pending ? 'is-modified' : ''}">
       ${items.map(item => `
         <button type="button" class="mini-status-btn ${item.checked ? 'is-checked' : ''}"
@@ -1516,13 +1535,25 @@ async function toggleStatus(entryId, monthKey) {
 async function handleBulkUpdate(monthKey, action) {
   if (!state.currentQuarter) return;
   const q = state.currentQuarter;
-  const val = action === 'check' ? '✓' : '';
+  const makeValue = (entry, key) => {
+    const current = getEffectiveStatus(entry, key);
+    const items = parseLetterStatuses(current);
+    if (!items.length) return action === 'check' ? '✓' : '';
+    const disabled = new Set((entry.disabledSupportSlots || []).map(label => String(label).toUpperCase()));
+    return serializeLetterStatuses(items.map(item => ({
+      ...item,
+      checked: disabled.has(item.letter) ? item.checked : action === 'check'
+    })));
+  };
   const targets = q.entries || [];
-  targets.forEach(entry => stageStatusChange(entry.id, monthKey === 'all' ? 'm1' : monthKey, monthKey === 'all' ? val : val));
+  targets.forEach(entry => {
+    const key = monthKey === 'all' ? 'm1' : monthKey;
+    stageStatusChange(entry.id, key, makeValue(entry, key));
+  });
   if (monthKey === 'all') {
     targets.forEach(entry => {
-      stageStatusChange(entry.id, 'm2', val);
-      stageStatusChange(entry.id, 'm3', val);
+      stageStatusChange(entry.id, 'm2', makeValue(entry, 'm2'));
+      stageStatusChange(entry.id, 'm3', makeValue(entry, 'm3'));
     });
   }
   showToast(`${action === 'check' ? 'Check' : 'Clear'} changes staged. Review them before updating.`, 'info');
@@ -1531,12 +1562,72 @@ async function handleBulkUpdate(monthKey, action) {
 function handleMonthToggleAll(monthKey) {
   if (!state.currentQuarter) return;
   const entries = state.currentQuarter.entries || [];
-  const checkedCount = entries.filter(e => getEffectiveStatus(e, monthKey) === '✓').length;
-  const action = checkedCount > entries.length / 2 ? 'uncheck' : 'check';
+  const metrics = entries.reduce((total, entry) => {
+    const month = statusMetrics(getEffectiveStatus(entry, monthKey), entry);
+    total.checked += month.checked;
+    total.total += month.total;
+    return total;
+  }, { checked: 0, total: 0 });
+  const action = metrics.total && metrics.checked > metrics.total / 2 ? 'uncheck' : 'check';
   handleBulkUpdate(monthKey, action);
 }
 
 // --- Pastor Modal & CRUD ---
+function renderPastorSupportSlots(entry) {
+  const group = document.getElementById('group-pastor-support-slots');
+  const list = document.getElementById('pastor-support-slots');
+  if (!group || !list) return;
+  group.style.display = entry ? 'block' : 'none';
+  if (!entry) {
+    delete pastorModal.dataset.supportSlots;
+    list.innerHTML = '';
+    return;
+  }
+  const labels = new Set(Array.isArray(entry.supportSlots) ? entry.supportSlots.map(label => String(label).toUpperCase()) : []);
+  ['m1', 'm2', 'm3'].forEach(key => parseLetterStatuses(entry[key]).forEach(item => labels.add(item.letter)));
+  const ordered = [...labels].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b));
+  const disabled = new Set((entry.disabledSupportSlots || []).map(label => String(label).toUpperCase()));
+  const slots = ordered.map(label => ({ label, enabled: !disabled.has(label) }));
+  pastorModal.dataset.supportSlots = JSON.stringify(slots);
+  list.innerHTML = slots.length ? slots.map(slot => `
+    <label class="pastor-support-slot ${slot.enabled ? '' : 'is-disabled'}">
+      <span class="pastor-support-slot-copy"><strong>Supporter ${escapeHtml(slot.label)}</strong><small>${slot.enabled ? 'Enabled' : 'Disabled; history retained'}</small></span>
+      <input type="checkbox" data-support-slot="${escapeHtml(slot.label)}" aria-label="Enable supporter slot ${escapeHtml(slot.label)}" onchange="updatePastorSupportSlot(this)" ${slot.enabled ? 'checked' : ''}>
+    </label>`).join('') : '<small class="form-hint">No lettered supporter slots yet. Add the first slot to begin tracking multiple supporters.</small>';
+}
+
+window.addPastorSupportSlot = function() {
+  let slots = readPastorSupportSlots();
+  if (slots.length >= 5000) return showToast('This pastor has reached the supporter slot limit.', 'error');
+  const maxPosition = Math.max(0, ...slots.map(slot => supportSlotPosition(slot.label)));
+  slots.push({ label: supportSlotLabel(maxPosition + 1), enabled: true });
+  pastorModal.dataset.supportSlots = JSON.stringify(slots);
+  const entry = { supportSlots: slots.map(slot => slot.label), disabledSupportSlots: slots.filter(slot => !slot.enabled).map(slot => slot.label) };
+  const list = document.getElementById('pastor-support-slots');
+  list.innerHTML = slots.map(slot => `
+    <label class="pastor-support-slot ${slot.enabled ? '' : 'is-disabled'}">
+      <span class="pastor-support-slot-copy"><strong>Supporter ${escapeHtml(slot.label)}</strong><small>${slot.enabled ? 'Enabled' : 'Disabled; history retained'}</small></span>
+      <input type="checkbox" data-support-slot="${escapeHtml(slot.label)}" aria-label="Enable supporter slot ${escapeHtml(slot.label)}" onchange="updatePastorSupportSlot(this)" ${slot.enabled ? 'checked' : ''}>
+    </label>`).join('');
+};
+
+window.updatePastorSupportSlot = function(input) {
+  const slots = readPastorSupportSlots();
+  pastorModal.dataset.supportSlots = JSON.stringify(slots);
+  const row = input.closest('.pastor-support-slot');
+  row?.classList.toggle('is-disabled', !input.checked);
+  const state = row?.querySelector('small');
+  if (state) state.textContent = input.checked ? 'Enabled' : 'Disabled; history retained';
+};
+
+function readPastorSupportSlots() {
+  let slots = [];
+  try { slots = JSON.parse(pastorModal.dataset.supportSlots || '[]'); } catch { slots = []; }
+  const checkboxes = new Map([...document.querySelectorAll('#pastor-support-slots [data-support-slot]')]
+    .map(input => [input.dataset.supportSlot, input.checked]));
+  return slots.map(slot => ({ label: slot.label, enabled: checkboxes.has(slot.label) ? checkboxes.get(slot.label) : slot.enabled }));
+}
+
 window.editPastor = function(entryId) {
   if (!state.currentQuarter) return;
   const entry = state.currentQuarter.entries.find(e => e.id === entryId);
@@ -1552,6 +1643,7 @@ window.editPastor = function(entryId) {
   document.getElementById('pastor-included').checked = entry.hidden !== true;
   document.getElementById('group-add-all').style.display = 'none';
   document.getElementById('group-pastor-visibility').style.display = 'block';
+  renderPastorSupportSlots(entry);
 
   pastorModal.classList.add('show');
 };
@@ -1567,6 +1659,7 @@ function openPastorModal() {
   document.getElementById('pastor-included').checked = true;
   document.getElementById('group-add-all').style.display = 'block';
   document.getElementById('group-pastor-visibility').style.display = 'none';
+  renderPastorSupportSlots(null);
 
   pastorModal.classList.add('show');
 }
@@ -1595,6 +1688,7 @@ async function handlePastorSubmit(e) {
   }
 
   const payload = { name, number, pastorType, notes, addToAllQuarters: addToAll, included };
+  if (entryId) payload.supportSlots = readPastorSupportSlots();
 
   try {
     if (entryId) {
@@ -1604,7 +1698,6 @@ async function handlePastorSubmit(e) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error('Failed to update pastor');
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update pastor');
       updateLastUpdated(data.lastUpdated);
@@ -1614,10 +1707,13 @@ async function handlePastorSubmit(e) {
       }
       const typeSyncCount = Array.isArray(data.typeUpdatedQuarters) ? data.typeUpdatedQuarters.length : 0;
       const visibilitySyncCount = Array.isArray(data.visibilityUpdatedQuarters) ? data.visibilityUpdatedQuarters.length : 0;
+      const slotSyncCount = Array.isArray(data.supportSlotUpdatedQuarters) ? data.supportSlotUpdatedQuarters.length : 0;
       showToast(data.entry.hidden
         ? `Pastor hidden in ${visibilitySyncCount || 1} quarter${(visibilitySyncCount || 1) === 1 ? '' : 's'} and moved to Hidden Pastors.`
         : visibilitySyncCount
           ? `Pastor included across ${visibilitySyncCount} quarter${visibilitySyncCount === 1 ? '' : 's'}. Support history preserved.`
+        : slotSyncCount
+          ? `Supporter slots updated across ${slotSyncCount} quarter${slotSyncCount === 1 ? '' : 's'}. Saved checks were preserved.`
         : typeSyncCount
           ? `Pastor type synchronized across ${typeSyncCount} quarter${typeSyncCount === 1 ? '' : 's'}.`
           : 'Pastor updated successfully!', 'success');
@@ -1836,6 +1932,7 @@ async function editHiddenPastor(quarterId, entryId) {
     document.getElementById('pastor-included').checked = false;
     document.getElementById('group-add-all').style.display = 'none';
     document.getElementById('group-pastor-visibility').style.display = 'block';
+    renderPastorSupportSlots(entry);
     pastorModal.dataset.editQuarterId = quarterId;
     closeHiddenPastorsModal();
     pastorModal.classList.add('show');
@@ -2089,9 +2186,9 @@ function renderSlide() {
       rowsHtml += `
         <tr>
           <td class="pastor-name-cell">${p.number ? p.number + '. ' : ''}${escapeHtml(p.name)}</td>
-          <td class="check-mark">${p.m1 ? escapeHtml(compactStatus(p.m1)) : ''}</td>
-          <td class="check-mark">${p.m2 ? escapeHtml(compactStatus(p.m2)) : ''}</td>
-          <td class="check-mark">${p.m3 ? escapeHtml(compactStatus(p.m3)) : ''}</td>
+          <td class="check-mark">${p.m1 ? escapeHtml(compactStatus(activeSupportStatus(p, p.m1))) : ''}</td>
+          <td class="check-mark">${p.m2 ? escapeHtml(compactStatus(activeSupportStatus(p, p.m2))) : ''}</td>
+          <td class="check-mark">${p.m3 ? escapeHtml(compactStatus(activeSupportStatus(p, p.m3))) : ''}</td>
         </tr>
       `;
     });

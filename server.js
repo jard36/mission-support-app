@@ -252,23 +252,147 @@ function assignmentMatchesEntry(assigned, entry) {
 function getSupporterEntryFilter(user) {
   if (user?.role !== 'supporter') return () => true;
   const assignments = getSupporterAssignments(user);
-  return entry => assignments.some(assigned => assignmentMatchesEntry(assigned, entry));
+  return entry => assignments.some(assigned => {
+    if (!assignmentMatchesEntry(assigned, entry)) return false;
+    if (!assigned.slot) return true;
+    return getEnabledEntrySupportSlots(entry).includes(String(assigned.slot).trim().toUpperCase());
+  });
+}
+
+function supportSlotLabel(position) {
+  let value = Math.max(1, Number(position) || 1);
+  let label = '';
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+  return label;
+}
+
+function supportSlotPosition(label) {
+  let value = 0;
+  for (const char of String(label || '').toUpperCase()) value = value * 26 + char.charCodeAt(0) - 64;
+  return value;
+}
+
+function parseSupportSlotStatuses(value) {
+  const text = String(value || '');
+  const matches = [...text.matchAll(/\b([A-Z]+)\s*\./gi)];
+  return matches.map((match, index) => {
+    const start = match.index + match[0].length;
+    const end = index + 1 < matches.length ? matches[index + 1].index : text.length;
+    return { label: match[1].toUpperCase(), checked: /✓/.test(text.slice(start, end)) };
+  });
+}
+
+function normalizeSlotLabels(labels) {
+  return [...new Set((Array.isArray(labels) ? labels : [])
+    .map(label => String(label || '').trim().toUpperCase())
+    .filter(label => /^[A-Z]{1,6}$/.test(label)))].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b));
 }
 
 function getEntrySupportSlots(entry) {
   const slots = new Set();
   ['m1','m2','m3'].forEach(key => {
-    const text = String(entry?.[key] || '');
-    for (const match of text.matchAll(/([A-Z])\s*\./gi)) slots.add(match[1].toUpperCase());
+    parseSupportSlotStatuses(entry?.[key]).forEach(item => slots.add(item.label));
   });
-  return [...slots].sort();
+  normalizeSlotLabels(entry?.disabledSupportSlots).forEach(label => slots.add(label));
+  return [...slots].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b));
+}
+
+function getEnabledEntrySupportSlots(entry) {
+  const disabled = new Set(normalizeSlotLabels(entry?.disabledSupportSlots));
+  return getEntrySupportSlots(entry).filter(label => !disabled.has(label));
+}
+
+function statusWithSupportSlots(value, slots) {
+  const labels = normalizeSlotLabels(slots);
+  if (!labels.length) return String(value || '');
+  const parsed = parseSupportSlotStatuses(value);
+  const known = new Map(parsed.map(item => [item.label, item.checked]));
+  const legacyChecked = parsed.length === 0 && String(value || '').includes('✓');
+  return labels.map((label, index) => `${label}. ${known.get(label) === true || (parsed.length === 0 && index === 0 && legacyChecked) ? '✓' : ''}`.trimEnd()).join(' ');
+}
+
+function setEnabledSupportStatuses(value, entry, checked) {
+  const parsed = parseSupportSlotStatuses(value);
+  if (!parsed.length) return checked ? '✓' : '';
+  const disabled = new Set(normalizeSlotLabels(entry?.disabledSupportSlots));
+  return parsed.map(slot => `${slot.label}. ${disabled.has(slot.label) ? (slot.checked ? '✓' : '') : (checked ? '✓' : '')}`.trimEnd()).join(' ');
+}
+
+function preserveDisabledSupportMarks(value, currentValue, entry) {
+  const current = parseSupportSlotStatuses(currentValue);
+  const incoming = parseSupportSlotStatuses(value);
+  const disabled = new Set(normalizeSlotLabels(entry?.disabledSupportSlots));
+  if (!current.length || !disabled.size) return value;
+  const nextByLabel = new Map(incoming.map(item => [item.label, item.checked]));
+  return current.map(item => {
+    const checked = disabled.has(item.label) ? item.checked : (nextByLabel.has(item.label) ? nextByLabel.get(item.label) : item.checked);
+    return `${item.label}. ${checked ? '✓' : ''}`.trimEnd();
+  }).join(' ');
+}
+
+function globalPastorSlots(db, names) {
+  const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
+  const slots = new Set();
+  (db.quarters || []).forEach(quarter => (quarter.entries || []).forEach(entry => {
+    if (!identities.has(pastorIdentityKey(entry.name))) return;
+    getEntrySupportSlots(entry).forEach(label => slots.add(label));
+  }));
+  return [...slots].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b));
+}
+
+function globalDisabledPastorSlots(db, names) {
+  const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
+  const slots = new Set();
+  (db.quarters || []).forEach(quarter => (quarter.entries || []).forEach(entry => {
+    if (!identities.has(pastorIdentityKey(entry.name))) return;
+    normalizeSlotLabels(entry.disabledSupportSlots).forEach(label => slots.add(label));
+  }));
+  return [...slots].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b));
+}
+
+function decorateEntrySupportSlots(db, entry) {
+  const names = [entry.name];
+  const labels = globalPastorSlots(db, names);
+  const disabledSupportSlots = globalDisabledPastorSlots(db, names);
+  return {
+    ...entry,
+    supportSlots: labels,
+    disabledSupportSlots
+  };
+}
+
+function validateSupportSlotConfig(input, knownSlots) {
+  if (!Array.isArray(input) || input.length > 5000) return { error: 'Supporter slot configuration is invalid.' };
+  const slots = [];
+  const seen = new Set();
+  for (const item of input) {
+    const label = String(item?.label || '').trim().toUpperCase();
+    if (!/^[A-Z]{1,6}$/.test(label) || seen.has(label) || typeof item?.enabled !== 'boolean') {
+      return { error: 'Each supporter slot needs a unique letter label and enabled state.' };
+    }
+    seen.add(label);
+    slots.push({ label, enabled: item.enabled });
+  }
+  slots.sort((a, b) => supportSlotPosition(a.label) - supportSlotPosition(b.label));
+  const requestedLabels = slots.map(slot => slot.label);
+  if (knownSlots.some(label => !seen.has(label))) return { error: 'Existing supporter slots cannot be removed; disable them to preserve their history.' };
+  const knownPositions = knownSlots.map(supportSlotPosition);
+  const maxPosition = Math.max(0, ...knownPositions);
+  const additions = requestedLabels.filter(label => !knownSlots.includes(label));
+  for (let index = 0; index < additions.length; index += 1) {
+    if (supportSlotPosition(additions[index]) !== maxPosition + index + 1) {
+      return { error: 'New supporter slots must continue the existing sequence.' };
+    }
+  }
+  return { slots };
 }
 
 function clearSupportSlotChecks(value, fallbackSlots = []) {
-  const slots = [...new Set([
-    ...[...String(value || '').matchAll(/([A-Z])\s*\./gi)].map(match => match[1].toUpperCase()),
-    ...fallbackSlots
-  ])];
+  const slots = normalizeSlotLabels([...parseSupportSlotStatuses(value).map(item => item.label), ...fallbackSlots]);
   return slots.length ? slots.map(slot => `${slot}.`).join(' ') : '';
 }
 
@@ -297,9 +421,9 @@ function restoreLatestQuarterSupportSlots(db) {
   return repaired;
 }
 
-function filterQuarterForUser(q, user) {
+function filterQuarterForUser(q, user, db = null) {
   if (!q) return q;
-  const activeEntries = (q.entries || []).filter(e => !e.hidden);
+  const activeEntries = (q.entries || []).filter(e => !e.hidden).map(entry => db ? decorateEntrySupportSlots(db, entry) : entry);
   if (user?.role !== 'supporter') return { ...q, entries: activeEntries };
   const assignments = getSupporterAssignments(user);
   return {
@@ -307,7 +431,7 @@ function filterQuarterForUser(q, user) {
     entries: activeEntries.filter(getSupporterEntryFilter(user)).map(entry => ({
       ...entry,
       supporterAssignedSlots: [...new Set(assignments.filter(assigned => assignmentMatchesEntry(assigned, entry))
-        .map(assigned => String(assigned.slot || '').trim().toUpperCase()).filter(Boolean))]
+        .map(assigned => String(assigned.slot || '').trim().toUpperCase()).filter(slot => slot && getEnabledEntrySupportSlots(entry).includes(slot)))]
     }))
   };
 }
@@ -487,9 +611,10 @@ app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
 
 app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, res) => {
   try {
-    const db = ensureAuthState(await readDB());
+    const db = normalizeDB(ensureAuthState(await readDB()));
     const user = db.users.find(u => u.id === req.params.id && u.role === 'supporter');
     if (!user) return res.status(404).json({ error:'Supporter not found.' });
+    const existingAssignments = Array.isArray(user.assignedPastors) ? user.assignedPastors : (user.assignedPastor ? [user.assignedPastor] : []);
 
     let pastors = Array.isArray(req.body?.pastors) ? req.body.pastors : [];
     if (!pastors.length && req.body?.name) pastors = [{ name:req.body.name, number:req.body.number, slot:req.body.slot }];
@@ -500,7 +625,24 @@ app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, re
     }))
       .filter(p => p.name)
       .filter((p, i, arr) => arr.findIndex(x => `${normalizePastorKey(x.name, x.number)}::${x.slot}` === `${normalizePastorKey(p.name, p.number)}::${p.slot}`) === i);
+
+    const retainedDisabledAssignments = existingAssignments
+      .filter(assigned => assigned?.slot && !isSupportSlotEnabledForPastor(db, assigned.name, assigned.number, assigned.slot))
+      .map(assigned => ({ name: String(assigned.name || '').trim(), number: String(assigned.number ?? '').trim(), slot: String(assigned.slot || '').trim().toUpperCase() }));
+    pastors = [...pastors, ...retainedDisabledAssignments]
+      .filter((pastor, index, all) => all.findIndex(item => `${normalizePastorKey(item.name, item.number)}::${item.slot}` === `${normalizePastorKey(pastor.name, pastor.number)}::${pastor.slot}`) === index);
     if (!pastors.length) return res.status(400).json({ error:'Select at least one pastor assignment.' });
+
+    for (const pastor of pastors) {
+      if (!pastor.slot && getEntrySupportSlots(latestPastorRecord(db, pastor.name, pastor.number) || {}).length) {
+        return res.status(400).json({ error:`Choose a specific supporter slot for ${pastor.name}.` });
+      }
+      const alreadyAssigned = existingAssignments.some(item => normalizePastorKey(item.name, item.number) === normalizePastorKey(pastor.name, pastor.number)
+        && String(item.slot || '').toUpperCase() === pastor.slot);
+      if (pastor.slot && !isSupportSlotEnabledForPastor(db, pastor.name, pastor.number, pastor.slot) && !alreadyAssigned) {
+        return res.status(400).json({ error:`Support slot ${pastor.slot}. for ${pastor.name} is disabled or unavailable.` });
+      }
+    }
 
     // A/B/C/etc. represent distinct supporter slots for a pastor. Prevent two
     // supporter accounts from taking the same slot while still allowing the
@@ -509,6 +651,7 @@ app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, re
     const otherSupporters = db.users.filter(u => u.role === 'supporter' && u.id !== user.id);
     for (const pastor of pastors) {
       if (!pastor.slot) continue;
+      if (!isSupportSlotEnabledForPastor(db, pastor.name, pastor.number, pastor.slot)) continue;
       const taken = otherSupporters.some(other => {
         const list = Array.isArray(other.assignedPastors) ? other.assignedPastors : (other.assignedPastor ? [other.assignedPastor] : []);
         return list.some(a => normalizePastorKey(a.name, a.number) === normalizePastorKey(pastor.name, pastor.number) && String(a.slot || '').toUpperCase() === pastor.slot);
@@ -621,10 +764,12 @@ function currentQuarterForManilaDate(db, date = new Date()) {
 function assignedEntriesForUser(user, quarter) {
   const assigned = Array.isArray(user?.assignedPastors) ? user.assignedPastors : (user?.assignedPastor ? [user.assignedPastor] : []);
   if (!assigned.length || !quarter) return [];
-  return (quarter.entries || []).filter(entry => !entry.hidden && assigned.some(p =>
-    normalizePastorKey(p.name, p.number) === normalizePastorKey(entry.name, entry.number) ||
-    (String(p.name || '').trim().toLowerCase() === String(entry.name || '').trim().toLowerCase() && (!p.number || String(p.number) === String(entry.number)))
-  ));
+  return (quarter.entries || []).filter(entry => !entry.hidden && assigned.some(p => {
+    const matches = normalizePastorKey(p.name, p.number) === normalizePastorKey(entry.name, entry.number) ||
+      (String(p.name || '').trim().toLowerCase() === String(entry.name || '').trim().toLowerCase() && (!p.number || String(p.number) === String(entry.number)));
+    if (!matches || !p.slot) return matches;
+    return getEnabledEntrySupportSlots(entry).includes(String(p.slot).trim().toUpperCase());
+  }));
 }
 
 function dueSummaryForUser(user, quarter, kind, date = new Date()) {
@@ -635,7 +780,7 @@ function dueSummaryForUser(user, quarter, kind, date = new Date()) {
   const monthKey = `m${monthIndex + 1}`;
   const monthName = quarter.months?.[monthIndex] || d.month;
   let due = entries;
-  if (kind === 'monthly') due = entries.filter(e => { const m = statusMetrics(e[monthKey]); return m.checked < m.total; });
+  if (kind === 'monthly') due = entries.filter(e => { const m = statusMetrics(e[monthKey], e); return m.checked < m.total; });
   if (kind === 'quarterly') due = entries.filter(e => !isEntryComplete(e));
   if (!due.length) return null;
   return {
@@ -881,6 +1026,52 @@ function syncPastorTypeAcrossQuarters(db, names, pastorType, updatedAt = new Dat
   return [...updatedQuarters];
 }
 
+function syncPastorSupportSlotsAcrossQuarters(db, names, slotConfig, updatedAt = new Date().toISOString()) {
+  const identities = new Set(names.map(pastorIdentityKey).filter(Boolean));
+  const labels = normalizeSlotLabels(slotConfig.map(slot => slot.label));
+  const disabled = slotConfig.filter(slot => !slot.enabled).map(slot => slot.label);
+  const updatedQuarters = new Set();
+  let updatedEntries = 0;
+
+  (db.quarters || []).forEach(quarter => (quarter.entries || []).forEach(entry => {
+    if (!identities.has(pastorIdentityKey(entry.name))) return;
+    let changed = false;
+    for (const key of ['m1', 'm2', 'm3']) {
+      const next = statusWithSupportSlots(entry[key], labels);
+      if (next !== String(entry[key] || '')) {
+        entry[key] = next;
+        changed = true;
+      }
+    }
+    const currentDisabled = normalizeSlotLabels(entry.disabledSupportSlots);
+    if (JSON.stringify(currentDisabled) !== JSON.stringify(disabled)) {
+      if (disabled.length) entry.disabledSupportSlots = disabled;
+      else delete entry.disabledSupportSlots;
+      changed = true;
+    }
+    if (changed) {
+      entry.updatedAt = updatedAt;
+      updatedEntries += 1;
+      updatedQuarters.add(quarter.id);
+    }
+  }));
+
+  return { quarterIds: [...updatedQuarters], updatedEntries, labels, disabled };
+}
+
+function isSupportSlotEnabledForPastor(db, name, number, slot) {
+  const latest = latestPastorRecord(db, name, number);
+  return Boolean(latest && !latest.hidden && getEnabledEntrySupportSlots(latest).includes(String(slot || '').trim().toUpperCase()));
+}
+
+function latestPastorRecord(db, name, number) {
+  const identity = pastorIdentityKey(name);
+  const records = (db.quarters || []).flatMap(quarter => (quarter.entries || []).map(entry => ({ quarter, entry })))
+    .filter(({ entry }) => pastorIdentityKey(entry.name) === identity);
+  if (!records.length) return null;
+  return records.sort((a, b) => quarterOrderValue(b.quarter) - quarterOrderValue(a.quarter))[0].entry;
+}
+
 function reconcilePastorTypesAcrossQuarters(db) {
   const entriesByPastor = new Map();
   db.quarters.forEach(q => (q.entries || []).forEach(entry => {
@@ -1041,24 +1232,20 @@ function synchronizeHiddenPastorsAcrossExistingQuarters(db) {
   return { pastorCount: hiddenIdentities.size, hiddenCount, affectedQuarters };
 }
 
-function statusMetrics(value) {
+function statusMetrics(value, entry = null) {
   const text = String(value || '').trim();
-  if (!text) return { checked: 0, total: 1 };
-  const matches = [...text.matchAll(/([A-Z])\s*\./gi)];
-  if (matches.length) {
-    let checkedLetters = 0;
-    matches.forEach((m, i) => {
-      const start = m.index + m[0].length;
-      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
-      if (/✓/.test(text.slice(start, end))) checkedLetters++;
-    });
-    return { checked: checkedLetters, total: matches.length };
+  const parsed = parseSupportSlotStatuses(text);
+  if (parsed.length) {
+    const disabled = new Set(normalizeSlotLabels(entry?.disabledSupportSlots));
+    const active = parsed.filter(item => !disabled.has(item.label));
+    return { checked: active.filter(item => item.checked).length, total: active.length };
   }
+  if (!text) return { checked: 0, total: 1 };
   return { checked: text.includes('✓') ? 1 : 0, total: 1 };
 }
 
 function entryMetrics(entry) {
-  const months = [entry.m1, entry.m2, entry.m3].map(statusMetrics);
+  const months = [entry.m1, entry.m2, entry.m3].map(value => statusMetrics(value, entry));
   return {
     checked: months.reduce((sum, m) => sum + m.checked, 0),
     total: months.reduce((sum, m) => sum + m.total, 0)
@@ -1067,7 +1254,7 @@ function entryMetrics(entry) {
 
 function isEntryComplete(entry) {
   const m = entryMetrics(entry);
-  return m.total > 0 && m.checked === m.total;
+  return m.total === 0 || m.checked === m.total;
 }
 
 function filterQuarterEntries(q, { pastorType = 'All', statusFilter = 'All', currentLatest = false } = {}) {
@@ -1117,9 +1304,12 @@ app.get('/api/quarters', async (req, res) => {
     const summary = db.quarters.map(q => {
       const visibleEntries = q.entries.filter(e => !e.hidden).filter(getSupporterEntryFilter(req.user));
       const total = visibleEntries.length;
-      const countM1 = visibleEntries.filter(e => e.m1 && e.m1.includes('✓')).length;
-      const countM2 = visibleEntries.filter(e => e.m2 && e.m2.includes('✓')).length;
-      const countM3 = visibleEntries.filter(e => e.m3 && e.m3.includes('✓')).length;
+      const monthlyMetrics = ['m1', 'm2', 'm3'].map(key => visibleEntries.reduce((metrics, entry) => {
+        const month = statusMetrics(entry[key], entry);
+        metrics.checked += month.checked;
+        metrics.total += month.total;
+        return metrics;
+      }, { checked: 0, total: 0 }));
       return {
         id: q.id,
         year: q.year,
@@ -1129,9 +1319,9 @@ app.get('/api/quarters', async (req, res) => {
         months: q.months,
         totalPastors: total,
         stats: {
-          m1: { count: countM1, percent: total ? Math.round((countM1 / total) * 100) : 0 },
-          m2: { count: countM2, percent: total ? Math.round((countM2 / total) * 100) : 0 },
-          m3: { count: countM3, percent: total ? Math.round((countM3 / total) * 100) : 0 },
+          m1: { count: monthlyMetrics[0].checked, total: monthlyMetrics[0].total, percent: monthlyMetrics[0].total ? Math.round((monthlyMetrics[0].checked / monthlyMetrics[0].total) * 100) : 0 },
+          m2: { count: monthlyMetrics[1].checked, total: monthlyMetrics[1].total, percent: monthlyMetrics[1].total ? Math.round((monthlyMetrics[1].checked / monthlyMetrics[1].total) * 100) : 0 },
+          m3: { count: monthlyMetrics[2].checked, total: monthlyMetrics[2].total, percent: monthlyMetrics[2].total ? Math.round((monthlyMetrics[2].checked / monthlyMetrics[2].total) * 100) : 0 },
         }
       };
     });
@@ -1162,7 +1352,7 @@ app.get('/api/quarters/:id', async (req, res) => {
     }
     const q = db.quarters.find(x => x.id === req.params.id);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
-    res.json(filterQuarterForUser(q, req.user));
+    res.json(filterQuarterForUser(q, req.user, db));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1203,7 +1393,7 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
       const sourceQ = db.quarters.find(q => q.id === sourceQuarterId);
       if (sourceQ) {
         entries = sourceQ.entries.filter(e => !e.hidden).map((e, idx) => {
-          const slots = getEntrySupportSlots(e);
+          const slots = globalPastorSlots(db, [e.name]);
           return {
             id: `${qKey}-${idx + 1}`,
             number: e.number || (idx + 1),
@@ -1214,6 +1404,7 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
             m3: clearSupportSlotChecks(e.m3, slots),
             notes: '',
             pastorType: normalizePastorType(e.pastorType),
+            ...(globalDisabledPastorSlots(db, [e.name]).length ? { disabledSupportSlots: globalDisabledPastorSlots(db, [e.name]) } : {}),
             hidden: false
           };
         });
@@ -1342,13 +1533,22 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
       pastorType: normalizePastorType(entry.pastorType),
       hidden: entry.hidden === true
     };
+    const supportSlotsProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'supportSlots');
+    const slotNames = [entry.name, name !== undefined ? String(name).trim() : entry.name];
+    const knownSupportSlots = globalPastorSlots(db, slotNames);
+    let slotConfig = null;
+    if (supportSlotsProvided) {
+      const validation = validateSupportSlotConfig(req.body.supportSlots, knownSupportSlots);
+      if (validation.error) return res.status(400).json({ error: validation.error });
+      slotConfig = validation.slots;
+    }
 
     const candidate = {
       name: name !== undefined ? String(name).trim() : entry.name,
       number: number !== undefined ? parseInt(number) : entry.number,
-      m1: m1 !== undefined ? m1 : (entry.m1 || ''),
-      m2: m2 !== undefined ? m2 : (entry.m2 || ''),
-      m3: m3 !== undefined ? m3 : (entry.m3 || ''),
+      m1: m1 !== undefined ? preserveDisabledSupportMarks(m1, entry.m1, entry) : (entry.m1 || ''),
+      m2: m2 !== undefined ? preserveDisabledSupportMarks(m2, entry.m2, entry) : (entry.m2 || ''),
+      m3: m3 !== undefined ? preserveDisabledSupportMarks(m3, entry.m3, entry) : (entry.m3 || ''),
       notes: notes !== undefined ? String(notes) : (entry.notes || ''),
       pastorType: pastorType !== undefined ? normalizePastorType(pastorType) : normalizePastorType(entry.pastorType),
       hidden: hidden !== undefined ? Boolean(hidden) : (included !== undefined ? !Boolean(included) : entry.hidden === true)
@@ -1365,6 +1565,19 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
         changes.push({ field: key === 'hidden' ? (after ? 'hidden' : 'included') : (monthName || key), from: before[key] ?? '', to: after });
       }
     });
+
+    const currentDisabledSlots = new Set(globalDisabledPastorSlots(db, slotNames));
+    const supportSlotsChanged = Boolean(slotConfig && (
+      JSON.stringify(slotConfig.map(slot => slot.label)) !== JSON.stringify(knownSupportSlots) ||
+      JSON.stringify(slotConfig.filter(slot => !slot.enabled).map(slot => slot.label)) !== JSON.stringify([...currentDisabledSlots].sort((a, b) => supportSlotPosition(a) - supportSlotPosition(b)))
+    ));
+    if (supportSlotsChanged) {
+      changes.push({
+        field: 'supportSlots',
+        from: knownSupportSlots.map(label => `${label}${currentDisabledSlots.has(label) ? ' (disabled)' : ''}`),
+        to: slotConfig.map(slot => `${slot.label}${slot.enabled ? '' : ' (disabled)'}`)
+      });
+    }
 
     if (!changes.length) {
       return res.json({ entry, lastUpdated: db.lastUpdated });
@@ -1401,8 +1614,13 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
       typeUpdatedQuarters = [...new Set([quarter.id, ...syncPastorTypeAcrossQuarters(db, [before.name, candidate.name], candidate.pastorType, typeTimestamp)])];
     }
 
+    let supportSlotSync = { quarterIds: [], updatedEntries: 0, labels: [], disabled: [] };
+    if (supportSlotsChanged) {
+      supportSlotSync = syncPastorSupportSlotsAcrossQuarters(db, [before.name, candidate.name], slotConfig, entry.updatedAt);
+    }
+
     const supportChanged = changes.some(c => quarter.months?.includes(c.field));
-    addAudit(db, req, supportChanged ? 'Support Updated' : (changes.some(c => ['hidden','included'].includes(c.field)) ? (entry.hidden ? 'Pastor Hidden' : 'Pastor Restored') : 'Pastor Edited'), {
+    addAudit(db, req, supportSlotsChanged ? 'Pastor Supporter Slots Updated' : (supportChanged ? 'Support Updated' : (changes.some(c => ['hidden','included'].includes(c.field)) ? (entry.hidden ? 'Pastor Hidden' : 'Pastor Restored') : 'Pastor Edited')), {
       quarterId: quarter.id,
       entryId: entry.id,
       pastorName: entry.name,
@@ -1411,11 +1629,13 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
         ? `${entry.name} was ${candidate.hidden ? 'hidden' : 'included'} across ${visibilityUpdatedQuarters.length} quarter${visibilityUpdatedQuarters.length === 1 ? '' : 's'}`
         : changes.some(change => change.field === 'pastorType')
         ? `${entry.name}'s pastor type was updated across ${Math.max(1, typeUpdatedQuarters.length)} quarter${typeUpdatedQuarters.length === 1 ? '' : 's'}`
+        : supportSlotsChanged
+        ? `${entry.name}'s supporter slots were synchronized across ${supportSlotSync.quarterIds.length} quarter${supportSlotSync.quarterIds.length === 1 ? '' : 's'}`
         : `${entry.name} was updated in ${quarter.id}`
     });
 
     await writeDB(db, { touchLastUpdated: true });
-    res.json({ entry, lastUpdated: db.lastUpdated, typeUpdatedQuarters, visibilityUpdatedQuarters });
+    res.json({ entry: decorateEntrySupportSlots(db, entry), lastUpdated: db.lastUpdated, typeUpdatedQuarters, visibilityUpdatedQuarters, supportSlotUpdatedQuarters: supportSlotSync.quarterIds });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1434,13 +1654,15 @@ app.post('/api/quarters/:quarterId/bulk', requireStaff, async (req, res) => {
     const db = normalizeDB(await readDB());
     const quarter = db.quarters.find(q => q.id === req.params.quarterId);
     if (!quarter) return res.status(404).json({ error: 'Quarter not found' });
-    const val = action === 'check' ? '✓' : '';
     const now = new Date().toISOString();
     let changedCount = 0;
     quarter.entries.filter(e => !e.hidden).forEach(e => {
       const keys = monthKey === 'all' ? ['m1','m2','m3'] : (['m1','m2','m3'].includes(monthKey) ? [monthKey] : []);
       let changed = false;
-      keys.forEach(key => { if (String(e[key] || '') !== val) { e[key] = val; changed = true; } });
+      keys.forEach(key => {
+        const nextValue = setEnabledSupportStatuses(e[key], e, action === 'check');
+        if (String(e[key] || '') !== nextValue) { e[key] = nextValue; changed = true; }
+      });
       if (changed) { e.updatedAt = now; changedCount++; }
     });
     if (changedCount) {
@@ -1470,9 +1692,9 @@ app.post('/api/quarters/:quarterId/batch-save', requireStaff, async (req, res) =
       const entry = quarter.entries.find(e => e.id === u.id && !e.hidden);
       if (!entry) return;
       const before = { m1: entry.m1 || '', m2: entry.m2 || '', m3: entry.m3 || '', notes: entry.notes || '' };
-      if (u.m1 !== undefined) entry.m1 = u.m1;
-      if (u.m2 !== undefined) entry.m2 = u.m2;
-      if (u.m3 !== undefined) entry.m3 = u.m3;
+      if (u.m1 !== undefined) entry.m1 = preserveDisabledSupportMarks(u.m1, before.m1, entry);
+      if (u.m2 !== undefined) entry.m2 = preserveDisabledSupportMarks(u.m2, before.m2, entry);
+      if (u.m3 !== undefined) entry.m3 = preserveDisabledSupportMarks(u.m3, before.m3, entry);
       if (u.notes !== undefined) entry.notes = u.notes;
 
       let changed = false;
@@ -1567,7 +1789,7 @@ app.get('/api/quarters/:id/hidden', requireStaff, async (req, res) => {
     const db = normalizeDB(await readDB());
     const q = db.quarters.find(x => x.id === req.params.id);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
-    res.json({ quarter: { ...q, entries: (q.entries || []).filter(e => e.hidden) } });
+    res.json({ quarter: { ...q, entries: (q.entries || []).filter(e => e.hidden).map(entry => decorateEntrySupportSlots(db, entry)) } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1678,21 +1900,21 @@ function compactPptStatus(value) {
   return String(value).replace(/\s+/g, ' ').trim();
 }
 
-function pptStatusDisplay(value) {
+function pptStatusDisplay(value, entry = null) {
   const text = compactPptStatus(value);
   if (!text) return '';
-  const matches = [...text.matchAll(/([A-Z])\.\s*(✓)?/gi)];
-  if (matches.length >= 2) {
-    return matches.map(m => `${m[1].toUpperCase()}. ${m[2] ? '✓' : ''}`.trimEnd()).join('    ');
-  }
-  return text;
+  const parsed = parseSupportSlotStatuses(text);
+  if (!parsed.length) return text;
+  const disabled = new Set(normalizeSlotLabels(entry?.disabledSupportSlots));
+  return parsed.filter(slot => !disabled.has(slot.label))
+    .map(slot => `${slot.label}. ${slot.checked ? '✓' : ''}`.trimEnd()).join('    ');
 }
 
-function pptStatusFontSize(value) {
-  const text = pptStatusDisplay(value);
+function pptStatusFontSize(value, entry = null) {
+  const text = pptStatusDisplay(value, entry);
   if (!text) return 20;
   if (text === '✓') return 32;
-  const letters = (text.match(/[A-Z]\./g) || []).length;
+  const letters = (text.match(/\b[A-Z]+\./g) || []).length;
   if (letters >= 5) return 10;
   if (letters === 4) return 11;
   if (letters === 3) return 13;
@@ -1805,8 +2027,8 @@ async function buildPptx(quarterList, filters = {}) {
         tableData.push([
           { text: nameLabel, options: { fontSize: 36, color: 'FFFFFF', fill: { color: rowBg }, bold: true, align: 'left', valign: 'middle', fit: 'shrink', margin: 0.08 } },
           ...vals.map(v => {
-            const text = pptStatusDisplay(v);
-            return { text, options: { fontSize: pptStatusFontSize(v), color: text ? '34D399' : 'FFFFFF', align: 'center', valign: 'middle', fill: { color: rowBg }, bold: true, fit: 'shrink', margin: 0.03 } };
+            const text = pptStatusDisplay(v, p);
+            return { text, options: { fontSize: pptStatusFontSize(v, p), color: text ? '34D399' : 'FFFFFF', align: 'center', valign: 'middle', fill: { color: rowBg }, bold: true, fit: 'shrink', margin: 0.03 } };
           })
         ]);
       });

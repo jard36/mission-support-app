@@ -1003,6 +1003,46 @@ body {
   margin-top: 0.25rem;
 }
 
+.pastor-support-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.55rem;
+  margin: 0.45rem 0 0.7rem;
+}
+
+.pastor-support-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-2, rgba(255,255,255,0.035));
+  color: var(--text-main);
+}
+
+.pastor-support-slot.is-disabled {
+  opacity: 0.62;
+}
+
+.pastor-support-slot-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.pastor-support-slot-copy small {
+  color: var(--text-subtle);
+  font-size: 0.7rem;
+}
+
+.pastor-support-slot input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--primary, #7c3aed);
+}
+
 .modal-footer {
   margin-top: 1.5rem;
   display: flex;

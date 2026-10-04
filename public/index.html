@@ -357,6 +357,14 @@
               </span>
             </label>
           </div>
+          <div class="form-group" id="group-pastor-support-slots" style="display:none;">
+            <label>Supporter Slots</label>
+            <div id="pastor-support-slots" class="pastor-support-slots" aria-live="polite"></div>
+            <button type="button" class="btn btn-sm btn-outline" id="btn-add-support-slot" onclick="addPastorSupportSlot()">
+              <i class="fa-solid fa-plus"></i> Add Supporter
+            </button>
+            <small class="form-hint">Disabled slots keep their saved checks and assignments. Re-enable them whenever needed.</small>
+          </div>
           <div class="form-group">
             <label for="pastor-notes">Notes / Remarks</label>
             <input type="text" id="pastor-notes" class="form-input" placeholder="Optional notes (e.g. Church assignment, special support)">
