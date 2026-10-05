@@ -1,9 +1,10 @@
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const pptxgen = require('pptxgenjs');
-const { Resend } = require('resend');
+const { createPptxService } = require('./server/reports/pptx');
+const { createReportRouter } = require('./server/routes/reports');
+const { createNotificationService, ensureNotificationState } = require('./server/notifications/service');
+const { createNotificationRouter } = require('./server/routes/notifications');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,11 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+function sendInternalError(res, error, context = 'Internal API error') {
+  console.error(context, error);
+  return res.status(500).json({ error: 'An internal error occurred.' });
+}
+
 // Explicitly serve the main app page. Vercel's current Express support
 // routes the project to this Express server automatically, so no
 // vercel.json routing rules are required.
@@ -38,6 +44,28 @@ app.get('/', (req, res) => {
 });
 
 const { readDB, writeDB, resetDB } = require('./db');
+
+const notificationService = createNotificationService({
+  normalizeDB,
+  readDB,
+  writeDB,
+  ensureAuthState,
+  normalizePastorKey,
+  getEnabledEntrySupportSlots,
+  statusMetrics,
+  isEntryComplete
+});
+const notificationRouters = createNotificationRouter({
+  service: notificationService,
+  readDB,
+  writeDB,
+  normalizeDB,
+  ensureAuthState,
+  requireAuth,
+  requireStaff,
+  requireAdmin,
+  sendInternalError
+});
 
 
 // --------------------------------------------------------------------------
@@ -548,7 +576,7 @@ app.get('/api/auth/users', requireAuth, requireStaff, async (req, res) => {
   try {
     const db = ensureAuthState(await readDB());
     res.json({ users: db.users.map(sanitizeUser) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.post('/api/auth/users', requireAuth, requireAdmin, async (req, res) => {
@@ -572,7 +600,7 @@ app.post('/api/auth/users', requireAuth, requireAdmin, async (req, res) => {
     addAudit(db, req, 'USER_CREATED', { userId:user.id, username:user.username, role:user.role });
     await writeDB(db);
     res.status(201).json({ user:sanitizeUser(user) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
@@ -605,7 +633,7 @@ app.put('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
     addAudit(db, req, req.body?.status ? 'USER_STATUS_CHANGED' : 'USER_UPDATED', { userId:user.id, username:user.username, status:user.status });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, res) => {
@@ -664,7 +692,7 @@ app.post('/api/auth/users/:id/assign', requireAuth, requireStaff, async (req, re
     addAudit(db, req, 'SUPPORTER_ASSIGNED', { userId:user.id, username:user.username, pastors });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.post('/api/auth/users/:id/unassign', requireAuth, requireStaff, async (req, res) => {
@@ -676,7 +704,7 @@ app.post('/api/auth/users/:id/unassign', requireAuth, requireStaff, async (req, 
     addAudit(db, req, 'SUPPORTER_UNASSIGNED', { userId:user.id, username:user.username });
     await writeDB(db);
     res.json({ user:sanitizeUser(user) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.delete('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) => {
@@ -690,7 +718,7 @@ app.delete('/api/auth/users/:id', requireAuth, requireAdmin, async (req, res) =>
     addAudit(db, req, 'USER_DELETED', { userId:user.id, username:user.username });
     await writeDB(db);
     res.json({ ok:true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.get('/api/health', async (req, res) => {
@@ -702,277 +730,10 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-const DEFAULT_NOTIFICATION_SETTINGS = {
-  monthly: {
-    enabled: true,
-    daysBefore: 5,
-    subject: 'Mission Support Reminder — {{month}}',
-    emailMessage: 'Hello {{name}},\n\nThis is a reminder regarding your mission support for {{month}}. Please review your support record before the deadline on {{deadline}}.\n\nPastors with pending support: {{pastors}}\n\nThank you for your faithful support.\nLiving Hope Baptist Church',
-    smsMessage: 'Hi {{name}}, reminder: please review your mission support for {{month}} before {{deadline}}. Pending: {{pastors}}. Thank you — Living Hope Baptist Church.'
-  },
-  quarterly: {
-    enabled: true,
-    daysBefore: 5,
-    subject: 'Mission Support Reminder — {{quarter}}',
-    emailMessage: 'Hello {{name}},\n\nThis is a reminder to review your mission support records for {{quarter}} before the quarter deadline on {{deadline}}.\n\nPastors with pending support: {{pastors}}\n\nThank you for your faithful support.\nLiving Hope Baptist Church',
-    smsMessage: 'Hi {{name}}, reminder: please review your mission support for {{quarter}} before {{deadline}}. Pending: {{pastors}}. Thank you — Living Hope Baptist Church.'
-  },
-  channels: { email: true, sms: true }
-};
-
-function cloneDefaultNotificationSettings() {
-  return JSON.parse(JSON.stringify(DEFAULT_NOTIFICATION_SETTINGS));
-}
-
-function ensureNotificationState(db) {
-  const defaults = cloneDefaultNotificationSettings();
-  const current = db.notificationSettings || {};
-  db.notificationSettings = {
-    ...defaults,
-    ...current,
-    monthly: { ...defaults.monthly, ...(current.monthly || {}) },
-    quarterly: { ...defaults.quarterly, ...(current.quarterly || {}) },
-    channels: { ...defaults.channels, ...(current.channels || {}) }
-  };
-  if (!Array.isArray(db.notificationLog)) db.notificationLog = [];
-  return db;
-}
-
-function manilaDateParts(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(date).reduce((out, p) => { if (p.type !== 'literal') out[p.type] = p.value; return out; }, {});
-  return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day) };
-}
-
-function daysInMonth(year, month) {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-function formatManilaDate(year, month, day) {
-  return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', year: 'numeric', month: 'long', day: 'numeric' })
-    .format(new Date(Date.UTC(year, month - 1, day, 12)));
-}
-
-function currentQuarterForManilaDate(db, date = new Date()) {
-  const d = manilaDateParts(date);
-  const qNum = Math.ceil(d.month / 3);
-  return db.quarters.find(q => Number(q.year) === d.year && Number(q.quarterNum) === qNum) || null;
-}
-
-function assignedEntriesForUser(user, quarter) {
-  const assigned = Array.isArray(user?.assignedPastors) ? user.assignedPastors : (user?.assignedPastor ? [user.assignedPastor] : []);
-  if (!assigned.length || !quarter) return [];
-  return (quarter.entries || []).filter(entry => !entry.hidden && assigned.some(p => {
-    const matches = normalizePastorKey(p.name, p.number) === normalizePastorKey(entry.name, entry.number) ||
-      (String(p.name || '').trim().toLowerCase() === String(entry.name || '').trim().toLowerCase() && (!p.number || String(p.number) === String(entry.number)));
-    if (!matches || !p.slot) return matches;
-    return getEnabledEntrySupportSlots(entry).includes(String(p.slot).trim().toUpperCase());
-  }));
-}
-
-function dueSummaryForUser(user, quarter, kind, date = new Date()) {
-  const entries = assignedEntriesForUser(user, quarter);
-  if (!entries.length) return null;
-  const d = manilaDateParts(date);
-  const monthIndex = ((d.month - 1) % 3);
-  const monthKey = `m${monthIndex + 1}`;
-  const monthName = quarter.months?.[monthIndex] || d.month;
-  let due = entries;
-  if (kind === 'monthly') due = entries.filter(e => { const m = statusMetrics(e[monthKey], e); return m.checked < m.total; });
-  if (kind === 'quarterly') due = entries.filter(e => !isEntryComplete(e));
-  if (!due.length) return null;
-  return {
-    pastors: due.map(e => e.name),
-    month: monthName,
-    monthKey,
-    quarter: quarter.quarterName ? `${quarter.year} ${quarter.quarterName}` : quarter.id
-  };
-}
-
-function notificationPeriod(kind, date = new Date()) {
-  const d = manilaDateParts(date);
-  const qNum = Math.ceil(d.month / 3);
-  if (kind === 'monthly') return `${d.year}-${String(d.month).padStart(2, '0')}`;
-  return `${d.year}-Q${qNum}`;
-}
-
-function renderNotificationTemplate(template, context) {
-  return String(template || '')
-    .replace(/{{\s*name\s*}}/gi, context.name || '')
-    .replace(/{{\s*month\s*}}/gi, context.month || '')
-    .replace(/{{\s*quarter\s*}}/gi, context.quarter || '')
-    .replace(/{{\s*deadline\s*}}/gi, context.deadline || '')
-    .replace(/{{\s*pastors\s*}}/gi, context.pastors || '')
-    .replace(/{{\s*year\s*}}/gi, context.year || '');
-}
-
-function normalizePHPhone(value) {
-  let phone = String(value || '').replace(/[^0-9+]/g, '');
-  if (phone.startsWith('+63')) phone = phone.slice(1);
-  if (phone.startsWith('09') && phone.length === 11) phone = '63' + phone.slice(1);
-  if (phone.startsWith('63') && phone.length === 12) return phone;
-  return '';
-}
-
-async function sendReminderEmail({ to, subject, text }) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) throw new Error('RESEND_API_KEY is not configured.');
-  const from = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
-  const resend = new Resend(apiKey);
-  const html = String(text || '').split(/\n{2,}/).map(block => `<p>${escapeHtmlServer(block).replace(/\n/g, '<br>')}</p>`).join('');
-  const result = await resend.emails.send({ from, to: [to], subject, text, html });
-  if (result?.error) throw new Error(result.error.message || 'Resend email failed.');
-  return result?.data?.id || null;
-}
-
-function escapeHtmlServer(value) {
-  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
-}
-
-async function sendReminderSMS({ to, message }) {
-  const apiToken = process.env.IPROG_SMS_API_TOKEN;
-  if (!apiToken) throw new Error('IPROG_SMS_API_TOKEN is not configured.');
-  const response = await fetch('https://www.iprogsms.com/api/v1/sms_messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ api_token: apiToken, phone_number: to, message })
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || Number(data?.status) !== 200) throw new Error(data?.message || `IPROG SMS request failed (${response.status}).`);
-  return data?.message_id || null;
-}
-
-async function sendNotificationBatch(db, { kind, recipientMode, userIds = [], channels = {}, manual = true, now = new Date() }) {
-  ensureAuthState(db);
-  ensureNotificationState(db);
-  const settings = db.notificationSettings;
-  const typeSettings = settings[kind];
-  if (!typeSettings?.enabled && !manual) return { sent: 0, skipped: 0, failed: 0, reason: `${kind} reminders are disabled.` };
-  const quarter = currentQuarterForManilaDate(db, now);
-  if (!quarter) return { sent: 0, skipped: 0, failed: 0, reason: 'No quarter exists for the current Manila date.' };
-
-  const d = manilaDateParts(now);
-  const deadlineMonth = kind === 'quarterly' ? Math.ceil(d.month / 3) * 3 : d.month;
-  const deadlineDay = daysInMonth(d.year, deadlineMonth);
-  const deadline = formatManilaDate(d.year, deadlineMonth, deadlineDay);
-  const period = notificationPeriod(kind, now);
-  const allUsers = db.users.filter(u => u.status === 'active');
-  let recipients = allUsers;
-  if (recipientMode === 'month' || recipientMode === 'quarter') {
-    recipients = allUsers.filter(u => u.role === 'supporter' && dueSummaryForUser(u, quarter, kind, now));
-  } else if (recipientMode === 'selected') {
-    const wanted = new Set((userIds || []).map(String));
-    recipients = allUsers.filter(u => wanted.has(String(u.id)));
-  }
-
-  const emailEnabled = channels.email !== false && settings.channels.email !== false;
-  const smsEnabled = channels.sms !== false && settings.channels.sms !== false;
-  const results = { sent: 0, skipped: 0, failed: 0, recipients: recipients.length, details: [] };
-
-  for (const user of recipients) {
-    const summary = dueSummaryForUser(user, quarter, kind, now) || {
-      pastors: [],
-      month: quarter.months?.[((d.month - 1) % 3)] || '',
-      monthKey: `m${((d.month - 1) % 3) + 1}`,
-      quarter: `${quarter.year} ${quarter.quarterName}`
-    };
-    const context = {
-      name: user.name || user.username,
-      month: summary.month,
-      quarter: summary.quarter,
-      deadline,
-      pastors: summary.pastors.join(', '),
-      year: String(d.year)
-    };
-    const channelsToSend = [];
-    if (emailEnabled && user.email) channelsToSend.push('email');
-    if (smsEnabled && normalizePHPhone(user.phone)) channelsToSend.push('sms');
-    if (!channelsToSend.length) {
-      results.skipped++;
-      results.details.push({ userId: user.id, name: user.name, status: 'skipped', reason: 'No usable email or SMS contact.' });
-      continue;
-    }
-
-    for (const channel of channelsToSend) {
-      const dedupeKey = `${kind}:${period}:${user.id}:${channel}`;
-      if (db.notificationLog.some(item => item.dedupeKey === dedupeKey && item.status === 'sent')) {
-        results.skipped++;
-        continue;
-      }
-      const log = {
-        id: `notification-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-        dedupeKey, kind, period, userId: user.id, userName: user.name || user.username,
-        channel, sentAt: new Date().toISOString(), status: 'failed'
-      };
-      try {
-        if (channel === 'email') {
-          log.providerMessageId = await sendReminderEmail({
-            to: user.email,
-            subject: renderNotificationTemplate(typeSettings.subject, context),
-            text: renderNotificationTemplate(typeSettings.emailMessage, context)
-          });
-        } else {
-          log.providerMessageId = await sendReminderSMS({
-            to: normalizePHPhone(user.phone),
-            message: renderNotificationTemplate(typeSettings.smsMessage, context)
-          });
-        }
-        log.status = 'sent';
-        results.sent++;
-      } catch (err) {
-        log.error = err.message;
-        results.failed++;
-      }
-      db.notificationLog.unshift(log);
-      if (db.notificationLog.length > 5000) db.notificationLog.length = 5000;
-      results.details.push({ userId: user.id, name: user.name, channel, status: log.status, error: log.error || null });
-    }
-  }
-  await writeDB(db);
-  return results;
-}
-
-function isScheduledReminderDay(kind, settings, date = new Date()) {
-  const d = manilaDateParts(date);
-  const days = daysInMonth(d.year, d.month);
-  const daysBefore = Math.max(0, Number(settings?.daysBefore ?? 5));
-  const monthlyDue = d.day === Math.max(1, days - daysBefore);
-  const quarterMonth = [3, 6, 9, 12].includes(d.month);
-  const quarterlyDue = quarterMonth && monthlyDue;
-  return kind === 'monthly' ? monthlyDue : quarterlyDue;
-}
-
-async function runScheduledNotifications() {
-  const db = normalizeDB(await readDB());
-  ensureNotificationState(db);
-  const now = new Date();
-  const outcomes = [];
-  for (const kind of ['monthly', 'quarterly']) {
-    const settings = db.notificationSettings[kind];
-    if (!settings.enabled || !isScheduledReminderDay(kind, settings, now)) continue;
-    const mode = kind === 'monthly' ? 'month' : 'quarter';
-    outcomes.push({ kind, result: await sendNotificationBatch(db, { kind, recipientMode: mode, channels: db.notificationSettings.channels, manual: false, now }) });
-  }
-  return outcomes;
-}
-
-// Vercel Cron / external scheduler entry point. Keep the secret server-side.
-app.get('/api/notifications/cron', async (req, res) => {
-  const expected = process.env.CRON_SECRET;
-  const auth = req.headers.authorization || '';
-  if (!expected) return res.status(503).json({ error: 'CRON_SECRET is not configured.' });
-  if (auth !== `Bearer ${expected}`) return res.status(401).json({ error: 'Unauthorized cron request.' });
-  try {
-    const result = await runScheduledNotifications();
-    res.json({ ok: true, result });
-  } catch (err) {
-    console.error('Scheduled notification error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+app.use('/api', notificationRouters.cron);
 
 app.use('/api', requireAuth);
+app.use('/api', notificationRouters.api);
 
 function ensureAuditTrail(db) {
   if (!Array.isArray(db.auditTrail)) db.auditTrail = [];
@@ -1144,20 +905,6 @@ function pastorTypeForNewOccurrence(db, pastorName, requestedType) {
     .find(entry => pastorIdentityKey(entry.name) === identity
       && ['Local', 'Foreign'].includes(normalizePastorType(entry.pastorType)));
   return mostRecentKnownType ? normalizePastorType(mostRecentKnownType.pastorType) : normalizedRequested;
-}
-
-async function sendPptxDownload(res, pptx, filename) {
-  // PptxGenJS only applies compression to its STREAM output type in Node;
-  // nodebuffer currently ignores the compression option and makes large files.
-  const buffer = await pptx.write({ outputType: 'STREAM', compression: true });
-  if (!Buffer.isBuffer(buffer) || buffer.length < 4) throw new Error('PowerPoint generation returned an invalid file.');
-  res.setHeader('Cache-Control', 'private, no-store');
-  res.status(200);
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('Content-Length', String(buffer.length));
-  res.setHeader('Cache-Control', 'private, no-store');
-  return res.end(buffer);
 }
 
 function normalizeEntry(entry) {
@@ -1345,7 +1092,7 @@ app.get('/api/quarters', async (req, res) => {
       lastUpdated: db.lastUpdated
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1369,7 +1116,7 @@ app.get('/api/quarters/:id', async (req, res) => {
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
     res.json(filterQuarterForUser(q, req.user, db));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1443,7 +1190,7 @@ app.post('/api/quarters', requireStaff, async (req, res) => {
 
     res.status(201).json({ ...newQuarter, lastUpdated: db.lastUpdated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1458,7 +1205,7 @@ app.delete('/api/quarters/:id', requireStaff, async (req, res) => {
     await writeDB(db, { touchLastUpdated: true });
     res.json({ message: 'Quarter deleted', deleted: deleted[0].id, lastUpdated: db.lastUpdated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1525,7 +1272,7 @@ app.post('/api/quarters/:quarterId/entries', requireStaff, async (req, res) => {
     await writeDB(db, { touchLastUpdated: true });
     res.status(201).json({ entry: newEntry, lastUpdated: db.lastUpdated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1653,7 +1400,7 @@ app.put('/api/quarters/:quarterId/entries/:entryId', requireStaff, async (req, r
     await writeDB(db, { touchLastUpdated: true });
     res.json({ entry: decorateEntrySupportSlots(db, entry), lastUpdated: db.lastUpdated, typeUpdatedQuarters, visibilityUpdatedQuarters, supportSlotUpdatedQuarters: supportSlotSync.quarterIds });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1687,7 +1434,7 @@ app.post('/api/quarters/:quarterId/bulk', requireStaff, async (req, res) => {
     }
     res.json({ message: 'Bulk update applied', quarter, changedCount, lastUpdated: db.lastUpdated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1736,7 +1483,7 @@ app.post('/api/quarters/:quarterId/batch-save', requireStaff, async (req, res) =
     if (auditChanges.length) await writeDB(db, { touchLastUpdated: true });
     res.json({ message: 'Batch updates saved successfully', updatedCount, quarter, lastUpdated: db.lastUpdated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1757,7 +1504,7 @@ app.get('/api/hidden-pastors', requireStaff, async (req, res) => {
     }));
     const hidden = [...hiddenByIdentity.values()].sort((a, b) => a.name.localeCompare(b.name));
     res.json({ hidden });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 // Restore one pastor identity across every quarter where that identity is hidden.
@@ -1797,7 +1544,7 @@ app.post('/api/hidden-pastors/include', requireStaff, async (req, res) => {
       restoredQuarterIds,
       lastUpdated: db.lastUpdated
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 app.get('/api/quarters/:id/hidden', requireStaff, async (req, res) => {
@@ -1806,83 +1553,7 @@ app.get('/api/quarters/:id/hidden', requireStaff, async (req, res) => {
     const q = db.quarters.find(x => x.id === req.params.id);
     if (!q) return res.status(404).json({ error: 'Quarter not found' });
     res.json({ quarter: { ...q, entries: (q.entries || []).filter(e => e.hidden).map(entry => decorateEntrySupportSlots(db, entry)) } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// Reminder / notification center
-app.get('/api/notifications/state', requireStaff, async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    ensureAuthState(db); ensureNotificationState(db);
-    const safeLog = db.notificationLog.slice(0, 100).map(item => ({
-      id: item.id, kind: item.kind, period: item.period, userId: item.userId,
-      userName: item.userName, channel: item.channel, sentAt: item.sentAt,
-      status: item.status, error: item.error || null
-    }));
-    res.json({ settings: db.notificationSettings, log: safeLog });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.put('/api/notifications/settings', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    ensureNotificationState(db);
-    const incoming = req.body || {};
-    const current = db.notificationSettings;
-    for (const kind of ['monthly', 'quarterly']) {
-      if (incoming[kind]) {
-        current[kind].enabled = Boolean(incoming[kind].enabled);
-        current[kind].daysBefore = Math.min(30, Math.max(0, Number(incoming[kind].daysBefore ?? current[kind].daysBefore)));
-        current[kind].subject = String(incoming[kind].subject ?? current[kind].subject).slice(0, 200);
-        current[kind].emailMessage = String(incoming[kind].emailMessage ?? current[kind].emailMessage).slice(0, 10000);
-        current[kind].smsMessage = String(incoming[kind].smsMessage ?? current[kind].smsMessage).slice(0, 900);
-      }
-    }
-    if (incoming.channels) {
-      current.channels.email = Boolean(incoming.channels.email);
-      current.channels.sms = Boolean(incoming.channels.sms);
-    }
-    await writeDB(db);
-    res.json({ settings: db.notificationSettings });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/notifications/recipients', requireStaff, async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    ensureAuthState(db); ensureNotificationState(db);
-    const kind = req.query.kind === 'quarterly' ? 'quarterly' : 'monthly';
-    const quarter = currentQuarterForManilaDate(db);
-    const users = db.users.filter(u => u.status === 'active').map(u => {
-      const summary = dueSummaryForUser(u, quarter, kind);
-      return {
-        id: u.id, name: u.name || u.username, username: u.username,
-        role: u.role, email: u.email || '', phone: u.phone || '',
-        hasEmail: Boolean(u.email), hasSms: Boolean(normalizePHPhone(u.phone)),
-        due: Boolean(summary), pastors: summary?.pastors || []
-      };
-    });
-    res.json({ kind, quarter: quarter ? { id: quarter.id, title: quarter.title, months: quarter.months } : null, users });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/notifications/send', requireStaff, async (req, res) => {
-  try {
-    const kind = req.body?.kind === 'quarterly' ? 'quarterly' : 'monthly';
-    const recipientMode = ['month','quarter','selected'].includes(req.body?.recipientMode) ? req.body.recipientMode : 'selected';
-    const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
-    const channels = {
-      email: req.body?.channels?.email !== false,
-      sms: req.body?.channels?.sms !== false
-    };
-    if (recipientMode === 'selected' && !userIds.length) return res.status(400).json({ error: 'Select at least one recipient.' });
-    const db = normalizeDB(await readDB());
-    const result = await sendNotificationBatch(db, { kind, recipientMode, userIds, channels, manual: true });
-    res.json(result);
-  } catch (err) {
-    console.error('Manual notification error:', err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { sendInternalError(res, err); }
 });
 
 // 10. GET audit trail
@@ -1891,7 +1562,7 @@ app.get('/api/audit-trail', requireStaff, async (req, res) => {
     const db = normalizeDB(await readDB());
     res.json({ auditTrail: db.auditTrail || [], lastUpdated: db.lastUpdated || null });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
@@ -1903,224 +1574,29 @@ app.post('/api/reset', requireAdmin, async (req, res) => {
     await writeDB(db, { touchLastUpdated: true });
     res.json({ message: 'Database reset to original PowerPoint reference successfully', quartersCount: db.quarters.length, lastUpdated: db.lastUpdated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 
 // 10. Health/status endpoint
 
 
-// 11. PPTX Generator Function
-function compactPptStatus(value) {
-  if (!value) return '';
-  return String(value).replace(/\s+/g, ' ').trim();
-}
-
-function pptStatusDisplay(value, entry = null) {
-  const text = compactPptStatus(value);
-  if (!text) return '';
-  const parsed = parseSupportSlotStatuses(text);
-  if (!parsed.length) return text;
-  const disabled = new Set(normalizeSlotLabels(entry?.disabledSupportSlots));
-  return parsed.filter(slot => !disabled.has(slot.label))
-    .map(slot => `${slot.label}. ${slot.checked ? '✓' : ''}`.trimEnd()).join('    ');
-}
-
-function pptStatusFontSize(value, entry = null) {
-  const text = pptStatusDisplay(value, entry);
-  if (!text) return 20;
-  if (text === '✓') return 32;
-  const letters = (text.match(/\b[A-Z]+\./g) || []).length;
-  if (letters >= 5) return 10;
-  if (letters === 4) return 11;
-  if (letters === 3) return 13;
-  if (letters === 2) return 15;
-  if (text.length <= 10) return 18;
-  if (text.length <= 18) return 15;
-  return 11;
-}
-
-function filtersForQuarter(q, filters = {}) {
-  const latestId = filters.latestQuarterId || null;
-  return {
-    pastorType: filters.pastorType || 'All',
-    statusFilter: filters.statusFilter || 'All',
-    currentLatest: Boolean(latestId && q.id === latestId)
-  };
-}
-
-async function buildPptx(quarterList, filters = {}) {
-  const pptx = new pptxgen();
-  // Explicit 16:9 PowerPoint canvas: 13.333 x 7.5 inches.
-  pptx.defineLayout({ name: 'MISSION_16X9', width: 13.333, height: 7.5 });
-  pptx.layout = 'MISSION_16X9';
-  const SW = 13.333;
-  const SH = 7.5;
-  const centerX = (w) => (SW - w) / 2;
-  pptx.author = 'Mission Support Tracker';
-  pptx.subject = 'Mission Support Records';
-  pptx.title = 'Mission Support';
-  pptx.company = 'Living Hope Baptist Church';
-  pptx.lang = 'en-US';
-
-  // __dirname can point at a bundled Next.js server chunk in production.
-  // Check the deployment root first, then the source-relative path.
-  const logoPath = [
-    path.join(process.cwd(), 'public', 'images', 'logo.png'),
-    path.join(__dirname, 'public', 'images', 'logo.png'),
-  ].find((candidate) => fs.existsSync(candidate));
-  // Filter each quarter independently so a pastor's incomplete marks in one
-  // quarter do not hide that quarter when their record exists in another.
-  // The newest quarter always shows its full roster, even with Incomplete Only.
-  quarterList = quarterList
-    .map(q => ({
-      ...q,
-      entries: filterQuarterEntries(q, filtersForQuarter(q, filters))
-        .map((entry, index) => ({ ...entry, number: index + 1 }))
-    }))
-    .filter(q => q.entries.length > 0);
-  if (!quarterList.length) {
-    const slide = pptx.addSlide();
-    slide.background = { color: '26143F' };
-    slide.addText(filters.statusFilter === 'Incomplete Only'
-      ? 'NO INCOMPLETE SUPPORT RECORDS'
-      : 'NO SUPPORT RECORDS', {
-      x: 0.8, y: 2.65, w: 11.733, h: 0.8,
-      fontSize: 28, bold: true, color: 'FFFFFF', align: 'center', valign: 'mid', fit: 'shrink'
-    });
-    return pptx;
-  }
-  const MARGIN = 0.85;
-  const CONTENT_W = SW - (MARGIN * 2);
-
-  quarterList.forEach(q => {
-    const coverSlide = pptx.addSlide();
-    coverSlide.background = { color: '2D1B4E' };
-
-    if (logoPath) {
-      coverSlide.addImage({ path: logoPath, x: centerX(1.98), y: 0.58, w: 1.98, h: 1.98 });
-    }
-    coverSlide.addText('LIVING HOPE BAPTIST CHURCH', {
-      x: 0, y: 2.72, w: SW, h: 0.42,
-      fontSize: 18, bold: true, color: 'DDD6FE', align: 'center', valign: 'mid',
-      fit: 'shrink'
-    });
-    coverSlide.addText('Managok, Malaybalay City', {
-      x: 0, y: 3.12, w: SW, h: 0.32,
-      fontSize: 13, color: 'A78BFA', align: 'center', valign: 'mid'
-    });
-    coverSlide.addText(q.title || `${q.year} MISSION SUPPORT ${q.quarterName.toUpperCase()}`, {
-      x: 0, y: 4.05, w: SW, h: 0.85,
-      fontSize: 31, bold: true, color: 'FFFFFF', align: 'center', valign: 'mid',
-      breakLine: false, fit: 'shrink', margin: 0.02
-    });
-
-    const entries = q.entries;
-    const months = q.months || ['Month 1', 'Month 2', 'Month 3'];
-    const chunkSize = 3;
-
-    for (let i = 0; i < entries.length; i += chunkSize) {
-      const chunk = entries.slice(i, i + chunkSize);
-      const slide = pptx.addSlide();
-      slide.background = { color: '26143F' };
-
-      slide.addText(q.title || `${q.year} MISSION SUPPORT ${q.quarterName.toUpperCase()}`, {
-        x: 0.60, y: 0.35, w: 12.133, h: 0.72,
-        fontSize: 29, bold: true, color: 'FFFFFF', align: 'center', valign: 'mid',
-        fit: 'shrink', margin: 0.02
-      });
-
-      const tableData = [[
-        { text: 'PASTOR/ MISSIONARY', options: { bold: true, fill: { color: '4C1D95' }, color: 'FFFFFF', align: 'center', valign: 'middle', fontSize: 17, fit: 'shrink' } },
-        ...months.slice(0, 3).map((m, idx) => ({ text: (m || `MONTH ${idx + 1}`).toUpperCase(), options: { bold: true, fill: { color: '4C1D95' }, color: 'FFFFFF', align: 'center', valign: 'middle', fontSize: 17, fit: 'shrink' } }))
-      ]];
-      while (tableData[0].length < 4) tableData[0].push({ text: `MONTH ${tableData[0].length}`, options: { bold: true, fill: { color: '4C1D95' }, color: 'FFFFFF', align: 'center', valign: 'middle', fontSize: 17 } });
-
-      chunk.forEach(p => {
-        const rowBg = '26143F';
-        const nameLabel = `${p.number ? p.number + '. ' : ''}${p.name}`;
-        const vals = [p.m1, p.m2, p.m3];
-        tableData.push([
-          { text: nameLabel, options: { fontSize: 36, color: 'FFFFFF', fill: { color: rowBg }, bold: true, align: 'left', valign: 'middle', fit: 'shrink', margin: 0.08 } },
-          ...vals.map(v => {
-            const text = pptStatusDisplay(v, p);
-            return { text, options: { fontSize: pptStatusFontSize(v, p), color: text ? '34D399' : 'FFFFFF', align: 'center', valign: 'middle', fill: { color: rowBg }, bold: true, fit: 'shrink', margin: 0.03 } };
-          })
-        ]);
-      });
-      while (tableData.length < 4) {
-        tableData.push([
-          { text: '', options: { fill: { color: '26143F' } } },
-          { text: '', options: { fill: { color: '26143F' } } },
-          { text: '', options: { fill: { color: '26143F' } } },
-          { text: '', options: { fill: { color: '26143F' } } }
-        ]);
-      }
-
-      slide.addTable(tableData, {
-        x: centerX(12.133), y: 1.72, w: 12.133,
-        colW: [5.02, 2.371, 2.371, 2.371],
-        rowH: [0.78, 1.42, 1.42, 1.42],
-        border: { pt: 1.5, color: '7C3AED' },
-        margin: 0.04,
-        autoFit: false
-      });
-    }
-  });
-  return pptx;
-}
-
-// 11. Download PPTX endpoint for single quarter
-app.get('/api/export/pptx/:quarterId', async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    const q = filterQuarterForUser(db.quarters.find(x => x.id === req.params.quarterId), req.user);
-    if (!q) return res.status(404).json({ error: 'Quarter not found' });
-
-    const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
-    const pptx = await buildPptx([q], { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
-    const filename = `Mission_Support_${q.id}.pptx`;
-    await sendPptxDownload(res, pptx, filename);
-  } catch (err) {
-    console.error('Export error:', err);
-    res.status(500).json({ error: err.message });
-  }
+// PPTX creation is kept separate from route registration so the Express app
+// retains the same report behavior while its entrypoint stays focused.
+const { buildPptx, sendPptxDownload } = createPptxService({
+  filterQuarterEntries,
+  parseSupportSlotStatuses,
+  normalizeSlotLabels
 });
 
-// 12. Download a filtered multi-quarter mission report
-app.get('/api/export/pptx-report', async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    const ids = String(req.query.quarterIds || '').split(',').map(s => s.trim()).filter(Boolean);
-    const quarterList = ids.length ? db.quarters.filter(q => ids.includes(q.id)) : db.quarters;
-    if (!quarterList.length) return res.status(400).json({ error: 'No quarters selected for the report' });
-    const pastorType = req.query.pastorType || 'All';
-    const statusFilter = req.query.statusFilter || 'All';
-    const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
-    const pptx = await buildPptx(quarterList, { pastorType, statusFilter, latestQuarterId: latestId });
-    const label = ids.length === 1 ? ids[0] : `${quarterList[0].year}-${quarterList[quarterList.length - 1].year}`;
-    const filename = `Mission_Support_Report_${label}.pptx`;
-    await sendPptxDownload(res, pptx, filename);
-  } catch (err) {
-    console.error('Report export error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 13. Download PPTX endpoint for all quarters
-app.get('/api/export/pptx-all', async (req, res) => {
-  try {
-    const db = normalizeDB(await readDB());
-    const latestId = db.quarters.length ? db.quarters[db.quarters.length - 1].id : null;
-    const visibleQuarters = req.user?.role === 'supporter' ? db.quarters.map(q => filterQuarterForUser(q, req.user)) : db.quarters;
-    const pptx = await buildPptx(visibleQuarters, { pastorType: req.query.pastorType || 'All', statusFilter: req.query.statusFilter || 'All', latestQuarterId: latestId });
-    const filename = 'Mission_Support_All_Quarters.pptx';
-    await sendPptxDownload(res, pptx, filename);
-  } catch (err) {
-    console.error('Export error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+app.use('/api', createReportRouter({
+  readDB,
+  normalizeDB,
+  filterQuarterForUser,
+  buildPptx,
+  sendPptxDownload,
+  sendInternalError
+}));
 
 // 13. Download JSON backup
 app.get('/api/backup', requireAdmin, async (req, res) => {
@@ -2130,7 +1606,7 @@ app.get('/api/backup', requireAdmin, async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="mission_support_backup.json"');
     res.send(JSON.stringify(db, null, 2));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendInternalError(res, err);
   }
 });
 

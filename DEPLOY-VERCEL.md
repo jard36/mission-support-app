@@ -2,7 +2,9 @@
 
 The Next.js App Router serves the existing interface and static assets. Its catch-all API route forwards `/api/*` requests to the existing Express app in `server.js`, preserving the current authentication, database, reports, PowerPoint exports, and notification routes.
 
-The JSON database remains the local fallback and seed data for a new Neon database.
+`server.js` remains the app entrypoint. Report exports and scheduled/interactive notification operations are grouped under `server/routes/`, with their generators and delivery logic under `server/reports/` and `server/notifications/`. The static browser UI uses shared helpers in `public/js/core/` and feature behavior in `public/js/features/`.
+
+The JSON database remains the local fallback and seed data for a new Neon database. After authentication, the browser can render the latest quarter from an account-scoped local cache while revalidating against the database; this cache expires after 24 hours and never stores credentials.
 
 ## Deploy
 

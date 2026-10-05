@@ -3,18 +3,18 @@
 Usa ka moderno ug sayon gamiton nga CRUD Web Application para sa pagdumala sa Mission Support sa mga Pastor ug Missionary, nga adunay automatic PowerPoint (.pptx) presentation generator.
 
 ## Mga Feature:
-1. **Kompleto nga Reference Data**: Naka-load daan ang tanang 14 ka quarters (2022 Q4 hangtod 2026 Q3) gikan sa orihinal nga 396-slide PowerPoint file.
+1. **Kompleto nga Reference Data**: Naka-load daan ang historical quarter records ug mahimong dugangan og bag-ong quarter samtang magpadayon ang support tracking.
 2. **Full CRUD**:
    - **Create**: Pagdugang og bag-ong Pastor/Missionary o paghimo og bag-ong Quarter.
    - **Read**: Live search, filter by Year & Quarter, statistics ug support completion percentage.
    - **Update**: 1-click monthly status toggling (check/uncheck), bulk updates, ug edit details.
    - **Hide / Restore**: Pastor records are never permanently deleted; excluded pastors remain in the database and can be restored from Hidden Pastors.
-3. **Downloadable PowerPoint (.pptx)**:
-   - I-click lang ang " Download PPT\ aron makakuha og bag-ong .pptx file nga gi-format tag-3 ka pastor matag slide aron dako ug klaro para sa church projector!
+3. **Mission Report ug PowerPoint (.pptx)**:
+   - Pilia ang mga quarter, pastor type, ug status sa Mission Report Builder aron makita sa web o ma-download isip usa ka offline-ready PowerPoint presentation.
 4. **Live Projector Mode**:
  - Pwede i-preview o i-presentar ang mga slides diretso sa browser gamit ang \Present Slides\ button.
-5. **Purple Theme UI**:
- - Nindot ug elegante nga purple color palette (#2D1B4E, #4C1D95, #7C3AED).
+5. **Themes**:
+ - Pilia ang original purple theme o ang light theme nga mas sayon basahon.
 
 ## Development with Next.js
 
@@ -28,8 +28,12 @@ The existing interface is served through the Next.js App Router. The original Ex
 ## Project structure
 
 - `app/` contains the Next.js App Router page, root layout, and API route adapter.
-- `public/` contains the existing styles, images, and browser application script.
-- `server.js` keeps the existing Express API and business logic.
+- `public/` contains the existing page markup, styles, images, and browser scripts.
+- `public/js/core/` contains the shared API client, app state, DOM helpers, and short-lived per-account quarter cache.
+- `public/js/features/` contains isolated browser feature behavior, including notifications.
+- `server.js` remains the Express app entrypoint and stable API boundary.
+- `server/routes/` contains the report and notification route groups.
+- `server/reports/` and `server/notifications/` contain the corresponding services.
 - `db.js` keeps the local JSON and Neon database implementation.
 
 ## Latest updates
@@ -37,13 +41,14 @@ The existing interface is served through the Next.js App Router. The original Ex
 - Dynamic A/B/C/D/E support totals: each letter is one support slot per month. For example, A+B across three months is 6/6; A+B+C is 9/9; A+B+C+D is 12/12; A+B+C+D+E is 15/15.
 - New Local / Foreign / Unassigned pastor classification and filters. The selected type is also applied to PPT exports and presentations.
 - Mission Report Builder: select multiple quarters, choose pastor type and status, view the selected report in the browser, or download one combined PPTX.
-- Incomplete-only reporting filters completed pastors from older/completed quarters. The latest/current quarter is always shown in full so the report can show both complete and incomplete pastors.
+- Incomplete-only reports retain each quarter’s month marks for incomplete pastors; the latest quarter is included in full, including completed pastors.
 - The All year filter is functional and displays every available quarter; the same selection can be presented or downloaded.
 - Pastor Include/Exclude: excluded pastors remain in the database and are omitted from active lists, reports, and PowerPoint exports. Hidden Pastors can be restored anytime.
 - Reminders & Notifications: Admin/Staff can send monthly or quarterly reminders through Resend Email and IPROG SMS, with recipient selection, editable templates, duplicate-send tracking, and scheduled reminder checks.
 - Export Backup (.json) and Reset to Original PPT Data are Admin-only.
 - Supporter account password and confirmation fields include show/hide eye controls.
 - Last updated changes only after actual mission-support record changes; login, viewing, and refreshes do not change it.
+- After authentication, the latest quarter can render from this browser's account-scoped cache for up to 24 hours while fresh records load. Credentials are never cached, and the cached view stays read-only until the server refresh succeeds.
 
 ## Login / Authentication
 

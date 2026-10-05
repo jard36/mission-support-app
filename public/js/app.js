@@ -2,7 +2,7 @@
 // MISSION SUPPORT TRACKER - FRONTEND ENGINE
 // ==========================================================================
 
-let currentUser = null;
+const apiRequest = (input, init) => window.MissionSupportApi.request(input, init);
 
 const THEME_STORAGE_KEY = 'livingHopeTheme';
 
@@ -17,81 +17,21 @@ function applyTheme(theme) {
   });
 }
 
-async function downloadPptxFile(url) {
-  const powerpointType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-  try {
-    const response = await fetch(url, { credentials: 'same-origin' });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      let payload = {};
-      try { payload = JSON.parse(body); } catch (_) { payload.error = body; }
-      throw new Error(payload.error || `PowerPoint export failed (${response.status}).`);
-    }
-    const responseType = (response.headers.get('Content-Type') || '').split(';')[0].toLowerCase();
-    let blob;
-    let exportFilename = '';
-    if (responseType === 'application/json') {
-      const payload = await response.json();
-      if (!payload.base64) throw new Error(payload.error || 'The export response did not contain a PowerPoint file.');
-      const binary = atob(payload.base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let offset = 0; offset < binary.length; offset += 1) bytes[offset] = binary.charCodeAt(offset);
-      blob = new Blob([bytes], { type: payload.mimeType || powerpointType });
-      exportFilename = payload.filename || '';
-    } else {
-      blob = await response.blob();
-    }
-    if (!blob.size) throw new Error('The PowerPoint export was empty. Please try again.');
-    const signature = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
-    if (signature[0] !== 0x50 || signature[1] !== 0x4b) {
-      const responseText = await blob.text().catch(() => '');
-      let errorMessage = responseText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
-      try { errorMessage = JSON.parse(responseText).error || errorMessage; } catch (_) {}
-      throw new Error(errorMessage || 'The server returned a response that is not a PowerPoint file.');
-    }
-    const disposition = response.headers.get('Content-Disposition') || '';
-    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-    let filename = exportFilename || plainName || 'Mission_Support_Report.pptx';
-    if (encodedName) {
-      try { filename = decodeURIComponent(encodedName); } catch (_) { filename = encodedName; }
-    }
-    const powerpointBlob = blob.type === powerpointType ? blob : new Blob([blob], { type: powerpointType });
-    const objectUrl = URL.createObjectURL(powerpointBlob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    showToast('PowerPoint download started.', 'success');
-  } catch (error) {
-    showToast(`PowerPoint download failed: ${error.message}`, 'error');
-  }
-}
-
-let state = {
-  quarters: [],
-  currentQuarter: null,
-  activeYear: null,
-  allMode: false,
-  allQuarters: [],
-  searchQuery: '',
-  filteredEntries: [],
-  lastUpdated: null,
-  auditTrail: [],
-  pendingChanges: {},
-  pastorTypeFilter: 'All',
-  statusFilter: 'All',
-  reportMode: false,
-  reportQuarters: [],
-  reportFilters: { pastorType: 'All', statusFilter: 'All' },
-  presentation: {
-    slides: [],
-    currentSlideIndex: 0
-  }
-};
+// Compatibility facade for report and presentation actions.
+function downloadPptxFile(...args) { return window.MissionSupportFeatures.reports.downloadPptxFile(...args); }
+function openReportModal(...args) { return window.MissionSupportFeatures.reports.openReportModal(...args); }
+function closeReportModal(...args) { return window.MissionSupportFeatures.reports.closeReportModal(...args); }
+function setAllReportQuarters(...args) { return window.MissionSupportFeatures.reports.setAllReportQuarters(...args); }
+function applyReportView(...args) { return window.MissionSupportFeatures.reports.applyReportView(...args); }
+function downloadReportPptx(...args) { return window.MissionSupportFeatures.reports.downloadReportPptx(...args); }
+function updateReportModeUi(...args) { return window.MissionSupportFeatures.reports.updateReportModeUi(...args); }
+function exitReportMode(...args) { return window.MissionSupportFeatures.reports.exitReportMode(...args); }
+const state = window.MissionSupportState.tracker;
+const entrySearchText = new WeakMap();
+let searchRenderFrame = null;
+let quarterListLoadVersion = 0;
+let quarterDetailsLoadVersion = 0;
+let quarterListLoadInFlight = false;
 
 // DOM Elements
 const quarterSelect = document.getElementById('quarter-select');
@@ -137,9 +77,8 @@ const userManagementModal = document.getElementById('user-management-modal');
 
 // --- Initialization ---
 async function initializeMissionSupportApp() {
-  document.body.classList.add('auth-locked');
-  setupAuthListeners();
-  await checkAuthSession();
+  window.MissionSupportFeatures?.notifications?.initialize();
+  await window.MissionSupportFeatures?.auth?.initialize();
 }
 
 if (document.readyState === 'loading') {
@@ -148,229 +87,7 @@ if (document.readyState === 'loading') {
   initializeMissionSupportApp();
 }
 
-function setupAuthListeners() {
-  document.querySelectorAll('[data-theme-choice]').forEach((button) => {
-    button.addEventListener('click', () => applyTheme(button.dataset.themeChoice));
-  });
-  applyTheme(document.documentElement.dataset.theme);
-  const form = document.getElementById('login-form');
-  if (form) form.addEventListener('submit', handleLogin);
-  document.getElementById('btn-open-signup')?.addEventListener('click', () => openSignupModal(false));
-  const togglePassword = document.getElementById('toggle-login-password');
-  const loginPassword = document.getElementById('login-password');
-  togglePassword?.addEventListener('click', () => {
-    if (!loginPassword) return;
-    const showing = loginPassword.type === 'text';
-    loginPassword.type = showing ? 'password' : 'text';
-    togglePassword.innerHTML = `<i class="fa-solid ${showing ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
-    togglePassword.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
-    togglePassword.setAttribute('title', showing ? 'Show password' : 'Hide password');
-  });
-  setupPasswordToggle('toggle-signup-password', 'signup-password');
-  setupPasswordToggle('toggle-signup-confirm-password', 'signup-confirm-password');
-  document.getElementById('modal-signup-close')?.addEventListener('click', closeSignupModal);
-  document.getElementById('btn-signup-cancel')?.addEventListener('click', closeSignupModal);
-  document.getElementById('signup-form')?.addEventListener('submit', handleSignup);
-  document.getElementById('btn-pending-refresh')?.addEventListener('click', refreshMyAccount);
-  const logout = document.getElementById('action-logout');
-  if (logout) logout.addEventListener('click', async (e) => {
-    e.preventDefault();
-    await signOut();
-  });
-  const supporterLogout = document.getElementById('btn-supporter-logout');
-  if (supporterLogout) supporterLogout.addEventListener('click', async () => {
-    await signOut();
-  });
-}
-
-function setupPasswordToggle(buttonId, inputId) {
-  const button = document.getElementById(buttonId);
-  const input = document.getElementById(inputId);
-  if (!button || !input || button.dataset.bound === '1') return;
-  button.dataset.bound = '1';
-  button.addEventListener('click', () => {
-    const showing = input.type === 'text';
-    input.type = showing ? 'password' : 'text';
-    button.innerHTML = `<i class="fa-solid ${showing ? 'fa-eye' : 'fa-eye-slash'}"></i>`;
-    button.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
-    button.setAttribute('title', showing ? 'Show password' : 'Hide password');
-  });
-}
-
-async function checkAuthSession() {
-  try {
-    const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
-    if (!res.ok) throw new Error('not authenticated');
-    const data = await res.json();
-    if (!data.authenticated) throw new Error('not authenticated');
-    enterAuthenticatedApp(data.user);
-  } catch (err) {
-    showLoginScreen();
-  }
-}
-
-async function handleLogin(e) {
-  e.preventDefault();
-  const form = e.currentTarget;
-  const username = form.username.value.trim();
-  const password = form.password.value;
-  const button = document.getElementById('btn-login');
-  const error = document.getElementById('login-error');
-  error.style.display = 'none';
-  button.disabled = true;
-  button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in...';
-  try {
-    const res = await fetch('/api/auth/login', {
-      credentials: 'same-origin',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Invalid username or password.');
-    form.reset();
-    enterAuthenticatedApp(data.user);
-  } catch (err) {
-    error.textContent = err.message;
-    error.style.display = 'block';
-  } finally {
-    button.disabled = false;
-    button.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Sign In';
-  }
-}
-
-function showLoginScreen() {
-  document.body.classList.add('auth-locked');
-  const screen = document.getElementById('login-screen');
-  if (screen) screen.style.display = 'flex';
-}
-
-function enterAuthenticatedApp(user) {
-  currentUser = user;
-  document.body.classList.remove('auth-locked');
-  const screen = document.getElementById('login-screen');
-  if (screen) screen.style.display = 'none';
-  const name = document.getElementById('header-user-name');
-  const role = document.getElementById('header-user-role');
-  const badge = document.getElementById('header-user');
-  if (name) name.textContent = user?.name || user?.username || 'User';
-  if (role) role.textContent = String(user?.role || 'user').toUpperCase();
-  if (badge) badge.style.display = 'flex';
-  applyRoleUi();
-  setupEventListeners();
-  renderPendingChanges();
-  if (user?.role === 'supporter' && user?.status !== 'active') {
-    showSupporterPending(true);
-  } else {
-    showSupporterPending(false);
-    loadQuartersList().catch(err => console.error('Initial load failed:', err));
-  }
-}
-
-function applyRoleUi() {
-  const supporter = currentUser?.role === 'supporter';
-  const staff = ['admin','staff'].includes(currentUser?.role);
-  document.body.classList.toggle('supporter-mode', supporter);
-  const management = document.getElementById('action-user-management');
-  if (management) management.style.display = staff ? '' : 'none';
-  const createUserBtn = document.getElementById('btn-create-user');
-  if (createUserBtn) createUserBtn.style.display = currentUser?.role === 'admin' ? '' : 'none';
-  ['action-add-quarter','action-audit-trail','action-hidden-pastors','action-notifications','btn-hidden-pastors'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.style.display = staff ? '' : 'none';
-  });
-  ['action-backup-json','action-reset-data'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.style.display = currentUser?.role === 'admin' ? '' : 'none';
-  });
-  const bell = document.getElementById('btn-notification-bell');
-  if (bell) bell.style.display = staff ? '' : 'none';
-  document.querySelector('.notification-tab[data-tab="settings"]')?.style.setProperty('display', currentUser?.role === 'admin' ? '' : 'none');
-  const saveNotificationSettingsBtn = document.getElementById('btn-save-notification-settings');
-  if (saveNotificationSettingsBtn) saveNotificationSettingsBtn.style.display = currentUser?.role === 'admin' ? '' : 'none';
-  ['btn-add-pastor','btn-save-changes','btn-quick-save','btn-discard-changes','month-bulk-bar'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
-  });
-  const report = document.getElementById('btn-report');
-  if (report) report.style.display = supporter ? 'none' : '';
-  const typeFilter = document.getElementById('pastor-type-filter');
-  const status = document.getElementById('status-filter');
-  const typeFilterGroup = typeFilter?.closest('.control-group');
-  const statusFilterGroup = status?.closest('.control-group');
-  const quarterControl = document.getElementById('quarter-select')?.closest('.control-group');
-  const yearControl = document.getElementById('year-pills')?.closest('.control-group');
-  const searchControl = document.getElementById('search-input')?.closest('.control-group');
-  // Supporters may browse every year and quarter, but operational filters are
-  // not useful to them. Hide the entire Pastor Type/Status controls, including labels.
-  if (typeFilterGroup) typeFilterGroup.style.display = supporter ? 'none' : '';
-  if (statusFilterGroup) statusFilterGroup.style.display = supporter ? 'none' : '';
-  if (quarterControl) quarterControl.style.display = '';
-  if (yearControl) yearControl.style.display = '';
-  if (searchControl) searchControl.style.display = supporter ? 'none' : '';
-  ['btn-present','btn-bulk-check-all','btn-bulk-clear-all','btn-exit-report','btn-add-pastor','btn-quick-save','btn-save-changes','btn-discard-changes','month-bulk-bar'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.style.display = supporter ? 'none' : '';
-  });
-  const toolbarTitle = document.getElementById('table-header-title');
-  if (toolbarTitle && supporter) toolbarTitle.textContent = 'My Supported Pastors';
-  // Supporters get a direct Sign Out button in the header. They do not need the three-dot menu.
-  const moreOptions = document.getElementById('btn-more-options');
-  if (moreOptions) moreOptions.style.display = supporter ? 'none' : '';
-  const supporterLogout = document.getElementById('btn-supporter-logout');
-  if (supporterLogout) supporterLogout.style.display = supporter ? 'inline-flex' : 'none';
-  const supporterMenuIds = [
-    'action-download-all','action-add-quarter','action-user-management',
-    'action-audit-trail','action-hidden-pastors','action-notifications'
-  ];
-  supporterMenuIds.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = supporter ? 'none' : '';
-  });
-  const logoutAction = document.getElementById('action-logout');
-  if (logoutAction) logoutAction.style.display = '';
-  const menuDivider = document.querySelector('#dropdown-menu .divider');
-  if (menuDivider) menuDivider.style.display = supporter ? 'none' : '';
-}
-
-function showSupporterPending(show) {
-  const pending = document.getElementById('supporter-pending-screen');
-  const main = document.querySelector('main.main-content');
-  const header = document.querySelector('.app-header');
-  if (pending) pending.style.display = show ? 'flex' : 'none';
-  if (main) main.style.display = show ? 'none' : '';
-  if (header) header.style.display = show ? 'flex' : '';
-}
-
-async function refreshMyAccount() {
-  try {
-    const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
-    const data = await res.json();
-    if (data.authenticated) enterAuthenticatedApp(data.user);
-  } catch (err) { console.error(err); }
-}
-
-async function signOut() {
-  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch (_) {}
-  currentUser = null;
-  state.pendingChanges = {};
-  const badge = document.getElementById('header-user');
-  if (badge) badge.style.display = 'none';
-  showLoginScreen();
-}
-
 let eventsInitialized = false;
-
-// If a server-side session expires, return to the login screen instead of leaving a blank/erroring app.
-const originalFetch = window.fetch.bind(window);
-window.fetch = async (input, init = {}) => {
-  // Explicitly include same-origin cookies. This is normally the browser default,
-  // but making it explicit avoids session loss after Vercel deployments/proxies.
-  const requestInit = { ...init, credentials: init.credentials || 'same-origin' };
-  const response = await originalFetch(input, requestInit);
-  const url = typeof input === 'string' ? input : (input?.url || '');
-  if (response.status === 401 && !url.includes('/api/auth/')) {
-    showLoginScreen();
-  }
-  return response;
-};
-
 
 function setupEventListeners() {
   if (eventsInitialized) return;
@@ -397,10 +114,18 @@ function setupEventListeners() {
   searchInput.addEventListener('input', (e) => {
     state.searchQuery = e.target.value.trim().toLowerCase();
     clearSearchBtn.style.display = state.searchQuery ? 'block' : 'none';
-    if (state.allMode) renderAllView(); else renderTable();
+    if (searchRenderFrame !== null) return;
+    searchRenderFrame = window.requestAnimationFrame(() => {
+      searchRenderFrame = null;
+      if (state.allMode) renderAllView(); else renderTable();
+    });
   });
 
   clearSearchBtn.addEventListener('click', () => {
+    if (searchRenderFrame !== null) {
+      window.cancelAnimationFrame(searchRenderFrame);
+      searchRenderFrame = null;
+    }
     searchInput.value = '';
     state.searchQuery = '';
     clearSearchBtn.style.display = 'none';
@@ -503,10 +228,10 @@ function setupEventListeners() {
     e.preventDefault();
     if (confirm('Are you sure you want to reset all data back to the original PowerPoint presentation? Any manual changes made since will be overwritten.')) {
       try {
-        const res = await fetch('/api/reset', { method: 'POST' });
+        const res = await apiRequest('/api/reset', { method: 'POST' });
         const data = await res.json();
         showToast('Database reset to original PPT reference!', 'success');
-        await loadQuartersList();
+        await loadQuartersList({ resetView: true });
       } catch (err) {
         showToast('Reset failed: ' + err.message, 'error');
       }
@@ -524,8 +249,8 @@ function setupEventListeners() {
   document.getElementById('btn-report-download').addEventListener('click', downloadReportPptx);
   document.getElementById('action-hidden-pastors')?.addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openHiddenPastorsModal(); });
   document.getElementById('btn-hidden-pastors')?.addEventListener('click', openHiddenPastorsModal);
-  document.getElementById('action-notifications')?.addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await openNotificationsModal(); });
-  document.getElementById('btn-notification-bell')?.addEventListener('click', openNotificationsModal);
+  document.getElementById('action-notifications')?.addEventListener('click', async (e) => { e.preventDefault(); dropdownMenu.classList.remove('show'); await window.MissionSupportFeatures.notifications.open(); });
+  document.getElementById('btn-notification-bell')?.addEventListener('click', () => window.MissionSupportFeatures.notifications.open());
 
   // Presentation Mode triggers
   document.getElementById('btn-present').addEventListener('click', openPresentationMode);
@@ -569,7 +294,7 @@ function openSignupModal(adminCreate = false) {
   const title = signupModal.querySelector('h3');
   const subtitle = signupModal.querySelector('.modal-subtitle');
   const roleGroup = document.getElementById('signup-role-group');
-  if (adminCreate && currentUser?.role !== 'admin') return;
+  if (adminCreate && window.MissionSupportState.currentUser?.role !== 'admin') return;
   if (title) title.textContent = adminCreate ? 'Create User Account' : 'Create Supporter Account';
   if (subtitle) subtitle.textContent = adminCreate ? 'Only Admin can create accounts. Supporters remain pending until assigned.' : 'Your account will remain pending until Admin/Staff confirms which pastor you support.';
   if (roleGroup) roleGroup.style.display = adminCreate ? '' : 'none';
@@ -586,7 +311,7 @@ async function handleSignup(e) {
   const btn=document.getElementById('btn-signup-submit'); if(btn){btn.disabled=true;btn.textContent='Creating...';}
   try {
     const url=adminCreate ? '/api/auth/users' : '/api/auth/signup';
-    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const res=await apiRequest(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const data=await res.json().catch(()=>({}));
     if(!res.ok) throw new Error(data.error||'Unable to create account.');
     closeSignupModal();
@@ -597,14 +322,14 @@ async function handleSignup(e) {
 }
 function showAuthFormError(id,msg){const el=document.getElementById(id);if(el){el.textContent=msg;el.style.display='block';}}
 async function openUserManagement(){
-  if(!userManagementModal || !['admin','staff'].includes(currentUser?.role)) return;
+  if(!userManagementModal || !['admin','staff'].includes(window.MissionSupportState.currentUser?.role)) return;
   userManagementModal.classList.add('show');
   await loadUsers();
 }
 function closeUserManagement(){userManagementModal?.classList.remove('show');}
 let managedUsers=[];
 async function loadUsers(){
-  try{const res=await fetch('/api/auth/users');const data=await res.json();if(!res.ok)throw new Error(data.error||'Unable to load users');managedUsers=data.users||[];renderUserManagement();}
+  try{const res=await apiRequest('/api/auth/users');const data=await res.json();if(!res.ok)throw new Error(data.error||'Unable to load users');managedUsers=data.users||[];renderUserManagement();}
   catch(err){showToast(err.message,'error');}
 }
 function getUserAssignedPastors(user){
@@ -644,7 +369,7 @@ function renderUserManagement(){
   if(!users.length){list.innerHTML='<div class="user-empty-state"><i class="fa-solid fa-user-slash"></i><strong>No users found</strong><span>Try another search or role filter.</span></div>';return;}
   list.innerHTML=users.map(u=>{
     const assigned=getUserAssignedPastors(u);
-    const isAdmin=currentUser?.role==='admin';
+    const isAdmin=window.MissionSupportState.currentUser?.role==='admin';
     const canDelete=isAdmin && u.role!=='admin';
     const initials=(u.name||u.username||'U').split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase();
     const roleLabel=String(u.role||'user').toUpperCase();
@@ -714,9 +439,9 @@ function getTakenAssignmentSlots(){
   return taken;
 }
 async function getPastorChoices(){
-  const res=await fetch('/api/quarters'); const data=await res.json(); if(!res.ok)throw new Error(data.error||'Unable to load pastors');
+  const res=await apiRequest('/api/quarters'); const data=await res.json(); if(!res.ok)throw new Error(data.error||'Unable to load pastors');
   const latest=[...(data.quarters||[])].sort((a,b)=>Number(b.year||0)-Number(a.year||0)||Number(b.quarterNum||0)-Number(a.quarterNum||0))[0]; if(!latest) return [];
-  const qr=await fetch(`/api/quarters/${latest.id}`); const q=await qr.json(); if(!qr.ok)throw new Error(q.error||'Unable to load pastors');
+  const qr=await apiRequest(`/api/quarters/${latest.id}`); const q=await qr.json(); if(!qr.ok)throw new Error(q.error||'Unable to load pastors');
   const seen=new Map();
   (q.entries||[]).filter(p=>!p.hidden).forEach(p=>{
     const key=pastorBaseKey(p);
@@ -880,18 +605,18 @@ async function saveAssignment(){
   const btn=document.getElementById('assign-pastor-save');
   if(!assignmentUserId)return;
   const pastors=assignmentPastors.flatMap(p=>(p.supportSlots||['']).map(slot=>({...p,slot}))).filter(p=>assignmentSelected.has(assignmentKey(p))).map(p=>({name:p.name,number:p.number,slot:p.slot||null}));
-  try{btn.disabled=true;const res=await fetch(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor slot${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
+  try{btn.disabled=true;const res=await apiRequest(`/api/auth/users/${assignmentUserId}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pastors})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Assignment failed');closeAssignmentModal();showToast(`${pastors.length} pastor slot${pastors.length===1?'':'s'} assigned successfully.`,'success');await loadUsers();}catch(err){showToast(err.message,'error');}finally{btn.disabled=false;}
 }
-async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await fetch(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
+async function unassignSupporter(id){if(!confirm('Remove this supporter\'s pastor assignment?'))return;try{const res=await apiRequest(`/api/auth/users/${id}/unassign`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Unassign failed');showToast('Supporter moved back to pending assignment.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
 async function toggleManagedUserStatus(id){
   const user=managedUsers.find(x=>x.id===id); if(!user)return;
-  if(currentUser?.id===id && user.status==='active') return showToast('You cannot disable your own account while signed in.','error');
+  if(window.MissionSupportState.currentUser?.id===id && user.status==='active') return showToast('You cannot disable your own account while signed in.','error');
   const disabling=user.status==='active';
   const nextStatus=disabling?'disabled':(user.role==='supporter'?(getUserAssignedPastors(user).length?'active':'pending_assignment'):'active');
   const label=disabling?'disable':'enable';
   if(!confirm(`Are you sure you want to ${label} ${user.name||user.username}'s account?`))return;
   try{
-    const res=await fetch(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:nextStatus})});
+    const res=await apiRequest(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:nextStatus})});
     const data=await res.json(); if(!res.ok)throw new Error(data.error||`Unable to ${label} account.`);
     showToast(`Account ${disabling?'disabled':'enabled'} successfully.`,'success'); await loadUsers();
   }catch(err){showToast(err.message,'error');}
@@ -901,19 +626,105 @@ async function editManagedUser(id){
   const name=prompt('Full name:',u.name||''); if(name===null)return;
   const email=prompt('Email:',u.email||''); if(email===null)return;
   const phone=prompt('Phone:',u.phone||''); if(phone===null)return;
-  try{const res=await fetch(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,phone})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Update failed');showToast('User updated.','success');await loadUsers();}catch(err){showToast(err.message,'error');}
+  try{const res=await apiRequest(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,phone})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Update failed');showToast('User updated.','success');await loadUsers();}catch(err){showToast(err.message,'error');}
 }
-async function resetManagedPassword(id){const p=prompt('Enter a new password (minimum 8 characters):');if(!p)return;if(p.length<8)return showToast('Password must be at least 8 characters.','error');try{const res=await fetch(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Password reset failed');showToast('Password reset successfully.','success');}catch(err){showToast(err.message,'error');}}
-async function deleteManagedUser(id){if(!confirm('Delete this account? This cannot be undone.'))return;try{const res=await fetch(`/api/auth/users/${id}`,{method:'DELETE'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Delete failed');showToast('User deleted.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
+async function resetManagedPassword(id){const p=prompt('Enter a new password (minimum 8 characters):');if(!p)return;if(p.length<8)return showToast('Password must be at least 8 characters.','error');try{const res=await apiRequest(`/api/auth/users/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Password reset failed');showToast('Password reset successfully.','success');}catch(err){showToast(err.message,'error');}}
+async function deleteManagedUser(id){if(!confirm('Delete this account? This cannot be undone.'))return;try{const res=await apiRequest(`/api/auth/users/${id}`,{method:'DELETE'});const data=await res.json();if(!res.ok)throw new Error(data.error||'Delete failed');showToast('User deleted.','success');await loadUsers();}catch(err){showToast(err.message,'error');}}
 
 // --- API Calls & Data Loading ---
-async function loadQuartersList() {
+function setCachedDataRefreshLock(locked) {
+  state.cacheSyncPending = locked;
+  const main = document.querySelector('main.main-content');
+  if (!main) return;
+  main.inert = locked;
+  if (locked) {
+    main.setAttribute('aria-busy', 'true');
+    showToast('Showing saved records while they refresh…', 'info');
+  } else {
+    main.removeAttribute('aria-busy');
+  }
+}
+
+function clearDashboardForAccountLoad() {
+  state.quarters = [];
+  state.currentQuarter = null;
+  state.allQuarters = [];
+  state.filteredEntries = [];
+  state.pendingChanges = {};
+  state.cacheSyncPending = false;
+  state.activeYear = null;
+  state.allMode = false;
+  state.reportMode = false;
+  state.reportQuarters = [];
+  state.reportFilters = { pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter };
+  state.lastUpdated = null;
+
+  setCachedDataRefreshLock(false);
+  toggleAllView(false);
+  updateReportModeUi();
+  quarterSelect.replaceChildren();
+  yearPills.replaceChildren();
+  pastorsTbody.replaceChildren();
+  visibleCount.textContent = '0 of 0 pastors';
+  noResults.style.display = 'none';
+  statTotal.textContent = '—';
+  statQuarterTitle.textContent = 'Loading mission support…';
+  [statM1Val, statM2Val, statM3Val].forEach(element => { element.textContent = '—'; });
+  [statM1Bar, statM2Bar, statM3Bar].forEach(element => { element.style.width = '0%'; });
+  updateLastUpdated(null);
+  renderPendingChanges();
+}
+
+function hydrateCachedDashboard(snapshot) {
+  const latestQuarter = snapshot?.latestQuarter;
+  const latestSummary = snapshot?.quarters?.at(-1);
+  if (!latestQuarter || !Array.isArray(latestQuarter.entries)
+    || !latestSummary || latestSummary.id !== latestQuarter.id) return false;
+
+  state.quarters = snapshot.quarters;
+  state.currentQuarter = latestQuarter;
+  state.allQuarters = [];
+  state.pendingChanges = {};
+  state.activeYear = latestQuarter.year ?? latestSummary.year ?? null;
+  state.lastUpdated = snapshot.lastUpdated || latestQuarter.lastUpdated || null;
+  state.allMode = false;
+  state.reportMode = false;
+  state.reportQuarters = [];
+  state.reportFilters = { pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter };
+
+  updateReportModeUi();
+  renderYearPills();
+  populateQuarterDropdown();
+  quarterSelect.value = latestQuarter.id;
+  updateLastUpdated(state.lastUpdated);
+  renderPendingChanges();
+  renderQuarterStats();
+  renderTable();
+  return true;
+}
+
+async function loadQuartersList({ hydrateCache = false, resetView = false, silent = false } = {}) {
+  if (state.cacheSyncPending && quarterListLoadInFlight) return;
+  const loadVersion = ++quarterListLoadVersion;
+  const user = window.MissionSupportState.currentUser;
+  let cachedViewShown = false;
+  quarterListLoadInFlight = true;
+
+  if (resetView) clearDashboardForAccountLoad();
+  if (hydrateCache) {
+    cachedViewShown = hydrateCachedDashboard(window.MissionSupportCache?.readDashboard(user));
+    if (cachedViewShown) setCachedDataRefreshLock(true);
+  }
+
   try {
-    const res = await fetch('/api/quarters');
+    const res = await apiRequest('/api/quarters');
     const data = await res.json();
+    if (loadVersion !== quarterListLoadVersion
+      || user?.id !== window.MissionSupportState.currentUser?.id) return;
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     if (!Array.isArray(data.quarters)) throw new Error('Quarter list response is invalid');
     state.quarters = data.quarters || [];
+    window.MissionSupportCache?.saveDashboard(user, state.quarters, data.lastUpdated);
     state.reportMode = false;
     state.reportQuarters = [];
     state.allMode = false;
@@ -931,23 +742,48 @@ async function loadQuartersList() {
 
     if (defaultQ) {
       quarterSelect.value = defaultQ.id;
-      await loadQuarterDetails(defaultQ.id);
+      await loadQuarterDetails(defaultQ.id, {
+        parentLoadVersion: loadVersion,
+        userId: user?.id,
+        silent
+      });
+    } else {
+      state.currentQuarter = null;
+      pastorsTbody.replaceChildren();
+      visibleCount.textContent = '0 of 0 pastors';
+      noResults.style.display = 'none';
+      if (state.cacheSyncPending) setCachedDataRefreshLock(false);
     }
   } catch (err) {
-    showToast('Error loading quarters: ' + err.message, 'error');
+    if (!silent && loadVersion === quarterListLoadVersion
+      && user?.id === window.MissionSupportState.currentUser?.id) {
+      showToast('Error loading quarters: ' + err.message, 'error');
+    }
+  } finally {
+    if (loadVersion === quarterListLoadVersion) quarterListLoadInFlight = false;
   }
 }
 
-async function loadQuarterDetails(quarterId) {
+async function loadQuarterDetails(quarterId, { parentLoadVersion = null, userId = null, silent = false } = {}) {
+  const requestVersion = ++quarterDetailsLoadVersion;
+  const requestedUserId = userId ?? window.MissionSupportState.currentUser?.id;
   try {
-    const res = await fetch(`/api/quarters/${quarterId}`);
+    const res = await apiRequest(`/api/quarters/${quarterId}`);
     const quarter = await res.json().catch(() => ({}));
+    if (requestVersion !== quarterDetailsLoadVersion
+      || (parentLoadVersion !== null && parentLoadVersion !== quarterListLoadVersion)
+      || requestedUserId !== window.MissionSupportState.currentUser?.id) return;
     if (!res.ok) throw new Error(quarter.error || `HTTP ${res.status}`);
     if (!Array.isArray(quarter.entries)) throw new Error('Quarter response is missing entries');
     state.currentQuarter = quarter;
     state.pendingChanges = {};
     renderPendingChanges();
     updateLastUpdated(quarter.lastUpdated || state.lastUpdated);
+    window.MissionSupportCache?.saveLatestQuarter(
+      window.MissionSupportState.currentUser,
+      quarter,
+      quarter.lastUpdated || state.lastUpdated
+    );
 
     // Update Year active pill
     if (quarter.year) {
@@ -957,8 +793,12 @@ async function loadQuarterDetails(quarterId) {
 
     renderQuarterStats();
     renderTable();
+    if (state.cacheSyncPending) setCachedDataRefreshLock(false);
   } catch (err) {
-    showToast('Failed to load quarter: ' + err.message, 'error');
+    if (!silent && requestVersion === quarterDetailsLoadVersion
+      && requestedUserId === window.MissionSupportState.currentUser?.id) {
+      showToast('Failed to load quarter: ' + err.message, 'error');
+    }
   }
 }
 
@@ -1050,7 +890,7 @@ function populateQuarterDropdown() {
 async function loadAllQuarterDetails() {
   try {
     const details = await Promise.all(state.quarters.map(async q => {
-      const res = await fetch(`/api/quarters/${q.id}`);
+      const res = await apiRequest(`/api/quarters/${q.id}`);
       if (!res.ok) throw new Error(`Failed to load ${q.id}`);
       return await res.json();
     }));
@@ -1125,13 +965,19 @@ function filterEntriesForDisplay(q, entries) {
 
   const search = state.searchQuery || '';
   if (search) {
-    out = out.filter(e => {
-      const haystack = `${e.name || ''} ${e.number || ''} ${e.rawName || ''}`.toLowerCase();
-      return haystack.includes(search);
-    });
+    out = out.filter(entry => getEntrySearchText(entry).includes(search));
   }
 
   return out;
+}
+
+function getEntrySearchText(entry) {
+  const signature = `${entry.name || ''} ${entry.number || ''} ${entry.rawName || ''}`;
+  const cached = entrySearchText.get(entry);
+  if (cached?.signature === signature) return cached.text;
+  const text = signature.toLowerCase();
+  entrySearchText.set(entry, { signature, text });
+  return text;
 }
 
 function renderStatusBadge(entry) {
@@ -1167,9 +1013,9 @@ function renderAllView() {
       <div class="table-responsive"><table class="data-table all-quarter-table"><thead><tr><th style="width:70px;">#</th><th>Pastor / Missionary</th><th>TYPE</th>${(q.months||[]).slice(0,3).map(m=>`<th style="text-align:center;">${escapeHtml(m).toUpperCase()}</th>`).join('')}<th style="text-align:center;">STATUS</th></tr></thead><tbody>`;
     entries.forEach((e,idx) => {
       const vals=[e.m1,e.m2,e.m3]; const badge=renderStatusBadge(e); const type=normalizePastorType(e.pastorType);
-      const assignedSlots = currentUser?.role === 'supporter' ? (e.supporterAssignedSlots || []) : [];
+      const assignedSlots = window.MissionSupportState.currentUser?.role === 'supporter' ? (e.supporterAssignedSlots || []) : [];
       const slotLabel = assignedSlots.length ? `<span class="supporter-slot-label">Your support: ${assignedSlots.map(escapeHtml).join(', ')}</span>` : '';
-      html += `<tr><td>${displayNumbers.get(e.id) || idx + 1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(activeSupportStatus(e,v)))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
+      html += `<tr><td>${displayNumbers.get(e.id) || idx + 1}</td><td><strong>${escapeHtml(e.name)}</strong>${slotLabel}</td><td><span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span></td>${vals.map(v=>`<td class="all-status-cell">${window.MissionSupportState.currentUser?.role === 'supporter' ? renderSupporterStatus(e,v) : escapeHtml(compactStatus(activeSupportStatus(e,v)))}</td>`).join('')}<td style="text-align:center;"><span class="status-badge ${badge.badgeClass}">${badge.badgeText}</span></td></tr>`;
     });
     html += '</tbody></table></div></div>';
   });
@@ -1247,10 +1093,10 @@ function renderTable() {
       <tr data-id="${escapeHtml(e.id)}">
         <td style="color: var(--text-subtle); font-weight: 700;">${displayNumbers.get(e.id) || (idx + 1)}</td>
         <td>
-          <div class="pastor-name-cell ${currentUser?.role === 'supporter' ? '' : 'pastor-name-editable'}" ${currentUser?.role === 'supporter' ? '' : `onclick="editPastor('${e.id}')" title="Click to edit pastor"`}>
+          <div class="pastor-name-cell ${window.MissionSupportState.currentUser?.role === 'supporter' ? '' : 'pastor-name-editable'}" ${window.MissionSupportState.currentUser?.role === 'supporter' ? '' : `onclick="editPastor('${e.id}')" title="Click to edit pastor"`}>
             <strong>${escapeHtml(e.name)}</strong>
             <span class="pastor-type-badge type-${type.toLowerCase()}">${escapeHtml(type)}</span>
-            ${currentUser?.role === 'supporter' && e.supporterAssignedSlots?.length ? `<span class="supporter-slot-label">Your support: ${e.supporterAssignedSlots.map(escapeHtml).join(', ')}</span>` : ''}
+            ${window.MissionSupportState.currentUser?.role === 'supporter' && e.supporterAssignedSlots?.length ? `<span class="supporter-slot-label">Your support: ${e.supporterAssignedSlots.map(escapeHtml).join(', ')}</span>` : ''}
             ${e.notes ? `<span class="pastor-note-pill" title="${escapeHtml(e.notes)}"><i class="fa-regular fa-note-sticky"></i> ${escapeHtml(e.notes)}</span>` : ''}
           </div>
         </td>
@@ -1331,7 +1177,7 @@ function renderSupporterStatus(entry, value) {
 
 function renderStatusBtn(entry, monthKey) {
   const val = getEffectiveStatus(entry, monthKey);
-  if (currentUser?.role === 'supporter') {
+  if (window.MissionSupportState.currentUser?.role === 'supporter') {
     return renderSupporterStatus(entry, val);
   }
   const pending = isPending(entry.id, monthKey);
@@ -1476,7 +1322,7 @@ async function savePendingChanges() {
   });
 
   try {
-    const res = await fetch(`/api/quarters/${state.currentQuarter.id}/batch-save`, {
+    const res = await apiRequest(`/api/quarters/${state.currentQuarter.id}/batch-save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updates: Object.values(grouped) })
@@ -1489,6 +1335,11 @@ async function savePendingChanges() {
     state.currentQuarter = data.quarter;
     state.pendingChanges = {};
     updateLastUpdated(data.lastUpdated);
+    window.MissionSupportCache?.saveLatestQuarter(
+      window.MissionSupportState.currentUser,
+      state.currentQuarter,
+      data.lastUpdated
+    );
     renderQuarterStats();
     renderTable();
     renderPendingChanges();
@@ -1513,7 +1364,7 @@ async function toggleStatus(entryId, monthKey) {
   if (!confirmed) return;
 
   try {
-    const res = await fetch(`/api/quarters/${state.currentQuarter.id}/entries/${entryId}`, {
+    const res = await apiRequest(`/api/quarters/${state.currentQuarter.id}/entries/${entryId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [monthKey]: newVal })
@@ -1693,7 +1544,7 @@ async function handlePastorSubmit(e) {
   try {
     if (entryId) {
       // PUT update
-      const res = await fetch(`/api/quarters/${editQuarterId}/entries/${entryId}`, {
+      const res = await apiRequest(`/api/quarters/${editQuarterId}/entries/${entryId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1720,7 +1571,7 @@ async function handlePastorSubmit(e) {
     } else {
       // POST create
       if (!state.currentQuarter) return;
-      const res = await fetch(`/api/quarters/${state.currentQuarter.id}/entries`, {
+      const res = await apiRequest(`/api/quarters/${state.currentQuarter.id}/entries`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1768,7 +1619,7 @@ async function handleQuarterSubmit(e) {
   const copyFrom = document.getElementById('new-quarter-copy').value;
 
   try {
-    const res = await fetch('/api/quarters', {
+    const res = await apiRequest('/api/quarters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ year, quarterNum, copyFromQuarterId: copyFrom })
@@ -1790,101 +1641,9 @@ async function handleQuarterSubmit(e) {
   }
 }
 
-// --- Mission Report Builder ---
-function openReportModal() {
-  const list = document.getElementById('report-quarter-list');
-  const latestId = state.quarters.length ? state.quarters[state.quarters.length - 1].id : null;
-  const selected = new Set(state.reportQuarters.length ? state.reportQuarters : (state.currentQuarter ? [state.currentQuarter.id] : latestId ? [latestId] : []));
-  document.getElementById('report-pastor-type').value = state.reportFilters.pastorType || state.pastorTypeFilter || 'All';
-  document.getElementById('report-status-filter').value = state.reportFilters.statusFilter || state.statusFilter || 'All';
-  list.innerHTML = state.quarters.map(q => `
-    <label class="report-quarter-option">
-      <input type="checkbox" value="${escapeHtml(q.id)}" ${selected.has(q.id) ? 'checked' : ''}>
-      <span><strong>${escapeHtml(q.year + ' ' + q.quarterName)}</strong><small>${escapeHtml((q.months||[]).join(', '))} • ${q.totalPastors || 0} pastors</small></span>
-    </label>`).join('');
-  reportModal.classList.add('show');
-}
-
-function closeReportModal() { reportModal.classList.remove('show'); }
-function setAllReportQuarters(checked) { document.querySelectorAll('#report-quarter-list input[type="checkbox"]').forEach(cb => cb.checked = checked); }
-function getSelectedReportQuarters() { return [...document.querySelectorAll('#report-quarter-list input[type="checkbox"]:checked')].map(cb => cb.value); }
-
-async function getReportQuarterDetails(ids) {
-  const details = await Promise.all(ids.map(async id => {
-    const res = await fetch(`/api/quarters/${id}`);
-    if (!res.ok) throw new Error(`Failed to load ${id}`);
-    return res.json();
-  }));
-  return details;
-}
-
-function getReportFilteredEntries(q, entries, pastorType, statusFilter) {
-  let out = entries || [];
-  if (pastorType !== 'All') out = out.filter(e => normalizePastorType(e.pastorType) === pastorType);
-  if (statusFilter !== 'All' && !isLatestQuarter(q)) {
-    out = out.filter(e => statusFilter === 'Incomplete Only' ? !isEntryComplete(e) : isEntryComplete(e));
-  }
-  return out;
-}
-
-async function applyReportView() {
-  const ids = getSelectedReportQuarters();
-  if (!ids.length) { showToast('Select at least one quarter for the report.', 'error'); return; }
-  state.reportQuarters = ids;
-  state.reportFilters = {
-    pastorType: document.getElementById('report-pastor-type').value,
-    statusFilter: document.getElementById('report-status-filter').value
-  };
-  state.pastorTypeFilter = state.reportFilters.pastorType;
-  state.statusFilter = state.reportFilters.statusFilter;
-  pastorTypeFilter.value = state.pastorTypeFilter;
-  statusFilter.value = state.statusFilter;
-  state.allMode = true;
-  state.reportMode = true;
-  state.currentQuarter = null;
-  state.activeYear = null;
-  quarterSelect.innerHTML = '<option value="ALL">Mission Report — Selected Quarters</option>';
-  quarterSelect.value = 'ALL';
-  updateYearPillsActive();
-  state.allQuarters = await getReportQuarterDetails(ids);
-  toggleAllView(true);
-  renderAllView();
-  renderAllStats();
-  updateReportModeUi();
-  closeReportModal();
-  showToast(`Report view applied to ${ids.length} quarter${ids.length === 1 ? '' : 's'}.`, 'success');
-}
-
-function downloadReportPptx() {
-  const ids = state.reportMode ? state.reportQuarters : getSelectedReportQuarters();
-  if (!ids.length) { showToast('Select at least one quarter for the report.', 'error'); return; }
-  const pastorType = state.reportMode ? state.reportFilters.pastorType : document.getElementById('report-pastor-type').value;
-  const status = state.reportMode ? state.reportFilters.statusFilter : document.getElementById('report-status-filter').value;
-  const params = new URLSearchParams({ quarterIds: ids.join(','), pastorType, statusFilter: status });
-  showToast('Preparing mission report PowerPoint...', 'info');
-  downloadPptxFile(`/api/export/pptx-report?${params.toString()}`);
-}
-
-function updateReportModeUi() {
-  const exit = document.getElementById('btn-exit-report');
-  if (exit) exit.style.display = state.reportMode ? 'inline-flex' : 'none';
-}
-
-function exitReportMode() {
-  state.reportMode = false;
-  state.reportQuarters = [];
-  state.reportFilters = { pastorType: state.pastorTypeFilter, statusFilter: state.statusFilter };
-  state.allMode = false;
-  toggleAllView(false);
-  updateReportModeUi();
-  const latest = state.quarters[state.quarters.length - 1];
-  if (latest) { state.activeYear = latest.year; populateQuarterDropdown(); quarterSelect.value = latest.id; loadQuarterDetails(latest.id); }
-}
-
-
 // --- Hidden Pastors ---
 async function openHiddenPastorsModal() {
-  if (!hiddenPastorsModal || !['admin','staff'].includes(currentUser?.role)) return;
+  if (!hiddenPastorsModal || !['admin','staff'].includes(window.MissionSupportState.currentUser?.role)) return;
   hiddenPastorsModal.classList.add('show');
   await loadHiddenPastors();
 }
@@ -1894,7 +1653,7 @@ async function loadHiddenPastors() {
   if (!list) return;
   list.innerHTML = '<div class="audit-empty">Loading hidden pastors...</div>';
   try {
-    const res = await fetch('/api/hidden-pastors');
+    const res = await apiRequest('/api/hidden-pastors');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Unable to load hidden pastors');
     const items = data.hidden || [];
@@ -1918,7 +1677,7 @@ function closeHiddenPastorsModal() { hiddenPastorsModal?.classList.remove('show'
 
 async function editHiddenPastor(quarterId, entryId) {
   try {
-    const res = await fetch(`/api/quarters/${encodeURIComponent(quarterId)}/hidden`);
+    const res = await apiRequest(`/api/quarters/${encodeURIComponent(quarterId)}/hidden`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Unable to load hidden pastor');
     const entry = (data.quarter?.entries || []).find(e => e.id === entryId);
@@ -1942,7 +1701,7 @@ async function editHiddenPastor(quarterId, entryId) {
 async function restoreHiddenPastor(encodedName) {
   const name = decodeURIComponent(encodedName);
   try {
-    const res = await fetch('/api/hidden-pastors/include', {
+    const res = await apiRequest('/api/hidden-pastors/include', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
     });
     const data = await res.json();
@@ -1950,7 +1709,7 @@ async function restoreHiddenPastor(encodedName) {
     updateLastUpdated(data.lastUpdated);
     showToast(`${data.name} included in ${data.restoredQuarterIds.length} quarter${data.restoredQuarterIds.length === 1 ? '' : 's'}. Support history preserved.`, 'success');
     await loadHiddenPastors();
-    const summaryRes = await fetch('/api/quarters');
+    const summaryRes = await apiRequest('/api/quarters');
     const summary = await summaryRes.json();
     if (!summaryRes.ok) throw new Error(summary.error || 'Unable to refresh quarter list');
     state.quarters = summary.quarters || [];
@@ -1970,153 +1729,6 @@ async function restoreHiddenPastor(encodedName) {
     }
   } catch (err) { showToast('Include failed: ' + err.message, 'error'); }
 }
-
-// --- Reminder / Notification Center ---
-let notificationRecipients = [];
-let notificationSettings = null;
-
-async function openNotificationsModal() {
-  if (!notificationsModal || !['admin','staff'].includes(currentUser?.role)) return;
-  notificationsModal.classList.add('show');
-  await loadNotificationState();
-  await loadNotificationRecipients();
-}
-
-function closeNotificationsModal() { notificationsModal?.classList.remove('show'); }
-
-async function loadNotificationState() {
-  try {
-    const res = await fetch('/api/notifications/state');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Unable to load notification settings');
-    notificationSettings = data.settings;
-    populateNotificationSettings(data.settings);
-    renderNotificationHistory(data.log || []);
-  } catch (err) { showToast(err.message, 'error'); }
-}
-
-function populateNotificationSettings(settings) {
-  if (!settings) return;
-  const ids = {
-    'monthly-enabled': settings.monthly.enabled,
-    'monthly-days': settings.monthly.daysBefore,
-    'monthly-subject': settings.monthly.subject,
-    'monthly-email': settings.monthly.emailMessage,
-    'monthly-sms': settings.monthly.smsMessage,
-    'quarterly-enabled': settings.quarterly.enabled,
-    'quarterly-days': settings.quarterly.daysBefore,
-    'quarterly-subject': settings.quarterly.subject,
-    'quarterly-email': settings.quarterly.emailMessage,
-    'quarterly-sms': settings.quarterly.smsMessage,
-    'channel-email': settings.channels.email,
-    'channel-sms': settings.channels.sms,
-    'notification-email': settings.channels.email,
-    'notification-sms': settings.channels.sms
-  };
-  Object.entries(ids).forEach(([id,val]) => { const el=document.getElementById(id); if(!el)return; if(el.type==='checkbox')el.checked=Boolean(val); else el.value=val ?? ''; });
-}
-
-async function loadNotificationRecipients() {
-  const kind = document.getElementById('notification-kind')?.value || 'monthly';
-  const list = document.getElementById('notification-recipient-list');
-  if (!list) return;
-  list.innerHTML = '<div class="audit-empty">Loading recipients...</div>';
-  try {
-    const res = await fetch(`/api/notifications/recipients?kind=${encodeURIComponent(kind)}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Unable to load recipients');
-    notificationRecipients = data.users || [];
-    const dueCount = notificationRecipients.filter(u => u.due).length;
-    const badge = document.getElementById('notification-badge');
-    if (badge) { badge.textContent = dueCount > 99 ? '99+' : String(dueCount); badge.style.display = dueCount ? 'inline-flex' : 'none'; }
-    renderNotificationRecipients();
-  } catch (err) { list.innerHTML = `<div class="audit-empty">${escapeHtml(err.message)}</div>`; }
-}
-
-function selectedRecipientIds() {
-  return [...document.querySelectorAll('#notification-recipient-list input[type="checkbox"]:checked')].map(x => x.value);
-}
-
-function renderNotificationRecipients() {
-  const list = document.getElementById('notification-recipient-list');
-  if (!list) return;
-  if (!notificationRecipients.length) { list.innerHTML = '<div class="audit-empty">No active accounts found.</div>'; return; }
-  list.innerHTML = notificationRecipients.map(u => `
-    <label class="notification-recipient">
-      <input type="checkbox" value="${escapeHtml(u.id)}" ${u.due ? 'checked' : ''}>
-      <span class="notification-recipient-main"><strong>${escapeHtml(u.name)}</strong><small>${escapeHtml(u.email || 'No email')} • ${escapeHtml(u.phone || 'No phone')}</small></span>
-      <span class="notification-recipient-meta ${u.due ? 'due' : ''}">${u.due ? `Due: ${escapeHtml((u.pastors || []).join(', '))}` : 'No pending support'}</span>
-    </label>`).join('');
-  updateNotificationRecipientMode();
-}
-
-function updateNotificationRecipientMode() {
-  const mode = document.querySelector('input[name="recipient-mode"]:checked')?.value || 'month';
-  const list = document.getElementById('notification-recipient-list');
-  if (list) list.style.opacity = mode === 'selected' ? '1' : '.65';
-  const summary = document.getElementById('notification-send-summary');
-  if (summary) summary.textContent = mode === 'month' ? 'Send to all supporters with pending support for the current month.' : mode === 'quarter' ? 'Send to all supporters with pending support for the current quarter.' : `${selectedRecipientIds().length} selected account(s).`;
-}
-
-async function sendNotificationsNow() {
-  const kind = document.getElementById('notification-kind')?.value || 'monthly';
-  const mode = document.querySelector('input[name="recipient-mode"]:checked')?.value || 'month';
-  const channels = { email: document.getElementById('notification-email')?.checked !== false, sms: document.getElementById('notification-sms')?.checked !== false };
-  const userIds = mode === 'selected' ? selectedRecipientIds() : [];
-  if (mode === 'selected' && !userIds.length) return showToast('Select at least one recipient.', 'error');
-  if (!channels.email && !channels.sms) return showToast('Select at least one channel.', 'error');
-  const btn = document.getElementById('btn-send-notification');
-  try {
-    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
-    const res = await fetch('/api/notifications/send', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind, recipientMode: mode, userIds, channels }) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Notification sending failed');
-    showToast(`Reminder complete: ${data.sent} sent, ${data.skipped} skipped, ${data.failed} failed.`, data.failed ? 'info' : 'success');
-    await loadNotificationState(); await loadNotificationRecipients();
-  } catch (err) { showToast(err.message, 'error'); }
-  finally { btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-paper-plane"></i> Send Now'; }
-}
-
-async function saveNotificationSettings() {
-  if (currentUser?.role !== 'admin') return showToast('Only Admin can change reminder settings.', 'error');
-  const payload = {
-    monthly: { enabled: document.getElementById('monthly-enabled').checked, daysBefore: document.getElementById('monthly-days').value, subject: document.getElementById('monthly-subject').value, emailMessage: document.getElementById('monthly-email').value, smsMessage: document.getElementById('monthly-sms').value },
-    quarterly: { enabled: document.getElementById('quarterly-enabled').checked, daysBefore: document.getElementById('quarterly-days').value, subject: document.getElementById('quarterly-subject').value, emailMessage: document.getElementById('quarterly-email').value, smsMessage: document.getElementById('quarterly-sms').value },
-    channels: { email: document.getElementById('channel-email').checked, sms: document.getElementById('channel-sms').checked }
-  };
-  try {
-    const res = await fetch('/api/notifications/settings', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Unable to save reminder settings');
-    notificationSettings=data.settings; populateNotificationSettings(data.settings); showToast('Reminder settings saved.', 'success');
-  } catch(err) { showToast(err.message,'error'); }
-}
-
-function renderNotificationHistory(log) {
-  const list=document.getElementById('notification-history-list'); if(!list)return;
-  if(!log.length){list.innerHTML='<div class="audit-empty">No reminder messages have been sent yet.</div>';return;}
-  list.innerHTML=log.map(item=>`<div class="notification-history-row"><strong>${escapeHtml(item.userName||'Account')}</strong><span>${escapeHtml(item.kind)} • ${escapeHtml(item.period)}</span><span>${escapeHtml(item.channel)}</span><span class="notification-status-${escapeHtml(item.status)}">${escapeHtml(item.status)}</span><small>${escapeHtml(item.sentAt ? new Date(item.sentAt).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}) : '')}${item.error ? `<br>${escapeHtml(item.error)}` : ''}</small></div>`).join('');
-}
-
-function setupNotificationUi() {
-  document.getElementById('modal-hidden-pastors-close')?.addEventListener('click', closeHiddenPastorsModal);
-  document.getElementById('modal-notifications-close')?.addEventListener('click', closeNotificationsModal);
-  document.querySelectorAll('.notification-tab').forEach(tab => tab.addEventListener('click', () => {
-    document.querySelectorAll('.notification-tab').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.notification-panel').forEach(x=>x.classList.remove('active'));
-    tab.classList.add('active'); document.getElementById(`notification-panel-${tab.dataset.tab}`)?.classList.add('active');
-  }));
-  document.getElementById('notification-kind')?.addEventListener('change', loadNotificationRecipients);
-  document.querySelectorAll('input[name="recipient-mode"]').forEach(r => r.addEventListener('change', updateNotificationRecipientMode));
-  document.getElementById('notification-select-all')?.addEventListener('click', () => { document.querySelectorAll('#notification-recipient-list input[type="checkbox"]').forEach(x=>x.checked=true); updateNotificationRecipientMode(); });
-  document.getElementById('notification-clear-all')?.addEventListener('click', () => { document.querySelectorAll('#notification-recipient-list input[type="checkbox"]').forEach(x=>x.checked=false); updateNotificationRecipientMode(); });
-  document.getElementById('btn-send-notification')?.addEventListener('click', sendNotificationsNow);
-  document.getElementById('btn-save-notification-settings')?.addEventListener('click', saveNotificationSettings);
-  document.querySelector('#notifications-modal .modal-backdrop')?.addEventListener('click', closeNotificationsModal);
-  document.querySelector('#hidden-pastors-modal .modal-backdrop')?.addEventListener('click', closeHiddenPastorsModal);
-}
-
-setupNotificationUi();
 
 // --- Live Presentation Slides Mode ---
 async function openPresentationMode() {
@@ -2265,8 +1877,14 @@ function updateLastUpdated(timestamp) {
 
 async function pollForUpdates() {
   if (presentationModal.classList.contains('show')) return;
+  if (state.cacheSyncPending) {
+    if (window.MissionSupportState.currentUser && !quarterListLoadInFlight) {
+      await loadQuartersList({ silent: true });
+    }
+    return;
+  }
   try {
-    const res = await fetch('/api/quarters');
+    const res = await apiRequest('/api/quarters');
     if (!res.ok) return;
     const data = await res.json();
     if (data.lastUpdated && data.lastUpdated !== state.lastUpdated && state.currentQuarter) {
@@ -2283,7 +1901,7 @@ async function pollForUpdates() {
 async function openAuditModal() {
   document.getElementById('audit-modal').classList.add('show');
   try {
-    const res = await fetch('/api/audit-trail');
+    const res = await apiRequest('/api/audit-trail');
     if (!res.ok) throw new Error('Failed to load audit history');
     const data = await res.json();
     state.auditTrail = data.auditTrail || [];
@@ -2319,31 +1937,9 @@ setInterval(pollForUpdates, 5000);
 
 // --- Utilities ---
 function showToast(message, type = 'info') {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  
-  let icon = 'fa-info-circle';
-  if (type === 'success') icon = 'fa-check-circle';
-  if (type === 'error') icon = 'fa-exclamation-circle';
-
-  toast.innerHTML = `<i class="fa-solid ${icon}"></i> <span>${escapeHtml(message)}</span>`;
-  container.appendChild(toast);
-
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    toast.style.transform = 'translateY(10px)';
-    toast.style.transition = 'all 0.3s ease';
-    setTimeout(() => toast.remove(), 300);
-  }, 3500);
+  window.MissionSupportDom.showToast(message, type);
 }
 
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+function escapeHtml(value) {
+  return window.MissionSupportDom.escapeHtml(value);
 }

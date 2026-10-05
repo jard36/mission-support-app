@@ -2228,6 +2228,9 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
 :root[data-theme="light"] .mini-status-btn.is-checked { color:#145e48 !important; border-color:#168764; background:#d9f3e9; }
 :root[data-theme="light"] .mini-status-btn.is-checked .mini-status-letter { color:#145e48; }
 :root[data-theme="light"] .mini-status-btn.is-checked .mini-check-box { color:#075c44; border-color:#168764; background:#bcebdc; }
+:root[data-theme="light"] .viewer-slot-chip.is-yours,
+:root[data-theme="light"] .supporter-slot-label { color:#145e48; border-color:#168764; background:#d9f3e9; }
+:root[data-theme="light"] .viewer-slot-chip.is-yours .viewer-slot-mark { color:#075c44; border-color:#168764; }
 :root[data-theme="light"] .all-quarter-heading { background:#f0ebf6; }
 :root[data-theme="light"] .assignment-option.is-selected { background:#efe8f8; }
 :root[data-theme="light"] .assignment-type-badge.foreign,
@@ -2255,4 +2258,18 @@ body.supporter-mode .app-header .header-actions{gap:10px;}
   .assignment-pastor-row { padding:9px; }
   .assignment-slot-check { min-width:38px; height:34px; }
   .assignment-slot-help { font-size:.64rem; }
+}
+
+:where(button, a, input, select, textarea, [role="button"], [role="checkbox"], [tabindex]):focus-visible {
+  outline:2px solid var(--accent-violet);
+  outline-offset:3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior:auto !important;
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
 }

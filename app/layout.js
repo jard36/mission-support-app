@@ -12,6 +12,13 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" data-theme="current">
       <head>
+        <Script src="/js/core/api.js" strategy="beforeInteractive" />
+        <Script src="/js/core/dom.js" strategy="beforeInteractive" />
+        <Script src="/js/core/state.js" strategy="beforeInteractive" />
+        <Script src="/js/core/cache.js" strategy="beforeInteractive" />
+        <Script src="/js/features/auth.js" strategy="beforeInteractive" />
+        <Script src="/js/features/reports.js" strategy="beforeInteractive" />
+        <Script src="/js/features/notifications.js" strategy="beforeInteractive" />
         <Script id="living-hope-theme-init" strategy="beforeInteractive">
           {`try { document.documentElement.dataset.theme = localStorage.getItem('livingHopeTheme') === 'light' ? 'light' : 'current'; } catch (_) {}`}
         </Script>
